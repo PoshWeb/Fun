@@ -9,9 +9,8 @@
     We just write function that start with `/`.
     
     Then `Start-Fun`
-
-    Just define a function starting with `/` and start the fun.
 .NOTES
+    .NOTES
     This is a fun experimental server in PowerShell.
 
     It will functions named starting with `/` to a server path.
@@ -29,7 +28,18 @@
     * Currently loaded modules
     * Current variables
     * The Current PowerShell Host
-    * 
+    * PowerShell Events
+    
+    This allows for fun and unique server scenarios.  
+    
+    We can allow selective control over our terminal (and operating systems) from our browser.
+
+    This is as fun (and potentially dangerous) as it sounds.
+
+    While we can call any command as a service, we want to be selective.
+
+    For these reasons, we want to run `Fun` locally on a random loopback port,
+    or in a container with a constrained list of commands.
 .EXAMPLE
     # Hello World server
     / { "<h1>hello world</h1>" }
@@ -107,39 +117,44 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
     Arguments  = $ArgumentList
     Input      = $allInput
 }) |
-    # Extend our output with a few script methods
-    #region .Listen
-    # `.Listen` to start a listener
-    Add-Member ScriptMethod Listen {            
-        if (-not $this.HttpListener) {
-            # Attach this listener to this object
-            $this | 
-                Add-Member NoteProperty HttpListener (
-                    [Net.HttpListener]::new()
-                ) -Force
-            # If we have any prefixes, add them
-            if ($this.Prefixes) {
-                foreach ($prefix in $this.Prefixes) {
-                    $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
-                    $this.HttpListener.Prefixes.Add($httpPrefix)
-                }                
-            } else {
-                # Otherwise, pick a random local loopback port
-                $this.HttpListener.Prefixes.Add(
-                    "http://127.0.0.1:$(Get-Random -Min 8kb -Max 42kb)/"
-                )
-            }
-        }
-       
-        # Start the listener
-        $this.HttpListener.Start()
-        # and return
-        $this.HttpListener
-    } -Force -PassThru |
-    #endregion .Listen
-    #region .Run
-    # `.Run` a url    
+    # Extend our output with a few script methods and properties
+    #region `.Define`
+    Add-Member ScriptProperty Define {
+        <#
+        .SYNOPSIS
+            Current endpoint definitions.
+        .DESCRIPTION
+            Returns the definition of all current endpoints
+        #>
+        [ScriptBlock]::Create(
+            @(
+                foreach ($func in $this.Functions) {
+                    if ($func -is [Management.Automation.FunctionInfo]) {
+                        "function $func {$(
+                            $func.ScriptBlock
+                        )$(
+                            [Environment]::NewLine
+                        )}"
+                    } elseif ($func -is [Management.Automation.AliasInfo]) {
+                        "Set-Alias '$(
+                            $func.Name -replace "'","''"
+                        )' '$(
+                            $func.ResolvedCommand -replace "'","''"
+                        )'"
+                    }
+                }
+            ) -join [Environment]::NewLine
+        )
+    } -Force -PassThru |    
+    #endregion `.Definition`
+    #region `.Run`
     Add-Member ScriptMethod Run {
+        <#
+        .SYNOPSIS
+            Run in a context
+        .DESCRIPTION
+            Run the function in a context
+        #>
         param($context)
 
         # Allow for mock requests by enabling casting to uris
@@ -176,7 +191,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         })
 
         # If there were no found functions
-        if (-not $functions) {         
+        if (-not $functions) {
             # We're going to send a 404.
             if ($response.StatusCode) {
                 $response.StatusCode = 404
@@ -255,8 +270,10 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             begin {
                 # To stream output, we need to set the protocol version
                 $response.ProtocolVersion = '1.1'
-                # and send chunked responses
+                # and send chunked responses.
                 $response.SendChunked = $true
+                # Get a pointer to the output stream for repeated use.
+                $outputStream = $response.OutputStream
             }
 
             process {
@@ -264,25 +281,27 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 $in = $_
 
                 # If it is XML,
-                if ($in.OuterXml) {
+                if ($in.OuterXml -and $outputStream.CanWrite) {
                     # write it out.
-                    $buffer = [Text.Encoding]::UTF8.GetBytes("$($in.OuterXml)")
-                    $response.OutputStream.Write($buffer, 0, $buffer.Length)
-                    $response.OutputStream.Flush()                    
+                    $buffer = [Text.Encoding]::UTF8.GetBytes("$($in.OuterXml)")                    
+                    $outputStream.Write($buffer, 0, $buffer.Length)
+                    $outputStream.Flush()                    
                 }
                 # If it has an HTML property
-                elseif ($in.html) {
+                elseif ($in.html -and $outputStream.CanWrite) {
                     # write that out
                     $buffer = [Text.Encoding]::UTF8.GetBytes("$($in.html)")
-                    $response.OutputStream.Write($buffer, 0, $buffer.Length)
-                    $response.OutputStream.Flush()
+                    $outputStream.Write($buffer, 0, $buffer.Length)
+                    $outputStream.Flush()
                 }
                 # Otherwise
-                else {
+                elseif ($outputStream.CanWrite) {
                     # Stringify the result.
                     $buffer = [Text.Encoding]::UTF8.GetBytes("$in")
-                    $response.OutputStream.Write($buffer, 0, $buffer.Length)
-                    $response.OutputStream.Flush()
+                    $outputStream.Write($buffer, 0, $buffer.Length)
+                    $outputStream.Flush()
+                } else {
+                    $in
                 }
             }
 
@@ -295,29 +314,61 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
 
         # Call our function and stream the results
-        . $function @functionParameters *>&1 | 
-            . $functionOutput
-    } -Force -PassThru |
+        try {
+            . $function @functionParameters *>&1 | 
+                . $functionOutput
+        } catch {
+            $err = $_
+            $response.StatusCode = 400
+            $response.Close([Text.Encoding]::UTF8.GetBytes(
+                "$err"
+            ), $false)
+            $err
+        }
+        
+    } -Force -PassThru |    
     Add-Member ScriptMethod Start {
         param([byte]$NodeCount = 1)
         # In order to start the fun, we need an http listener
-        $listener =
-            # If none exist,
-            if (-not $this.HttpListener) {
-                # call `.Listen`
-                $this.Listen() # this will create and start a listener
+        if (-not $this.HttpListener) {
+            # Attach this listener to this object
+            $this | 
+                Add-Member NoteProperty HttpListener (
+                    [Net.HttpListener]::new()
+                ) -Force
+            # If we have any prefixes, add them
+            if ($this.Prefixes) {
+                foreach ($prefix in $this.Prefixes) {
+                    $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
+                    $this.HttpListener.Prefixes.Add($httpPrefix)
+                }                
             } else {
-                # Otherwise get the listener              
-                $this.HttpListener
-                # and try to start it
-                $this.HttpListener.Start()
+                # Otherwise, pick a random local loopback port
+                $this.HttpListener.Prefixes.Add(
+                    "http://127.0.0.1:$(Get-Random -Min 8kb -Max 42kb)/"
+                )
             }
+        }
+       
+        # Start the listener
+        $this.HttpListener.Start()
+
+        $listener = $this.HttpListener
 
         # Write a warning so we know something is listening
         Write-Warning "Listening on $($listener.Prefixes)"
 
         # Now start our fun little server loop in a thread job.
-        $JobScript = {
+        
+        Start-ThreadJob -ScriptBlock $this.JobScript -ArgumentList $this -Name "$(
+            $listener.Prefixes -replace '/$'
+        )" -ThrottleLimit 16kb |
+            Add-Member NoteProperty HttpListener $listener -Force -PassThru |
+            Add-Member NoteProperty Fun $this -Force -PassThru
+    
+    } -Force -PassThru | 
+    Add-Member ScriptProperty JobScript { 
+        return {
             # All we need to do is pass this object
             param($this)
             
@@ -328,7 +379,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 # Get the next context
                 $getContext = $httpListener.GetContextAsync()
                 # and wait until it's ready
-                while (-not $getContext.Wait(17)) { }                
+                while (-not $getContext.Wait(13)) { }
                 $context = $getContext.Result
                 # If we don't yet have a counter
                 if (-not $this.Counter) {
@@ -352,16 +403,8 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     }                    
                 }
             }
-        } 
-        
-        foreach ($nodeNumber in 1..$NodeCount) {
-            Start-ThreadJob -ScriptBlock $JobScript -ArgumentList $this -Name "$(
-                $listener.Prefixes -replace '/$'
-            )" -ThrottleLimit 16kb |
-                Add-Member NoteProperty HttpListener $listener -Force -PassThru |
-                Add-Member NoteProperty Fun $this -Force -PassThru
         }
-    } -Force -PassThru | 
+    } -Force -PassThru |
     # We also want one script property that calculates a request rate
     Add-Member ScriptProperty RequestRate {
         # To do this we just take the counter
