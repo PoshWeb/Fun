@@ -1,0 +1,70 @@
+# Simple workflow for deploying static content to GitHub Pages
+name: deploy
+
+on:
+  # Runs on pushes 
+  push:
+    branches:
+      - 'main'
+  # and run on a schedule
+  schedule: 
+    # for those that don't speak cron, this runs:
+    # * At the first minute (`1`)
+    # * Every 21st hour (`1/21`)
+    # * Every day of the year (`* * *`)
+    - cron: '1 1/21 * * *'
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, and cancel any in-progress deployments if a new one is triggered
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  # GitHub Pages use a single job, named deploy.
+  deploy:
+    # By using an environment, we avoid locking
+    environment:
+      name: github-pages
+      # and we can control where it is deployed.
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      # Check out our repository
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          # Using fetch-depth: 0 to ensure we get the full history of the repository
+          fetch-depth: 0
+      # Setup GitHub Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@main
+      # To Build Pages in PowerShell, we just call a script      
+      - name: Build Pages
+        # set the shell to pwsh
+        shell: pwsh
+        # and then call any script we would like to build the page.
+        # By default, this can use the same name as the workflow
+        # (in this case, just deploy.ps1)
+        run: . "./$env:GITHUB_WORKFLOW.ps1"
+        # This approach makes it easier to logically organize workflow scripts.
+        # We will also map the page_url to an environment variable, so our scripts can access it.
+        env:
+          site_url: ${{ steps.deployment.outputs.page_url }}
+          page_url: ${{ steps.deployment.outputs.page_url }}
+          analytics_id: ${{vars.ANALYTICSID}}
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@main
+        with:
+          # Upload the contents to the GitHub Pages artifact
+          path: './'          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@main
