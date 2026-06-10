@@ -30,7 +30,7 @@ CompanyName = 'Start-Automating'
 Copyright = '2026 Start-Automating'
 
 # Description of the functionality provided by this module
-Description = 'A Fun PowerShell Server'
+Description = 'A Fun Functional PowerShell Server'
 
 # Minimum version of the PowerShell engine required by this module
 # PowerShellVersion = ''
