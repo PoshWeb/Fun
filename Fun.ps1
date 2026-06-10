@@ -165,7 +165,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 }
                 New-Item @newFile -Force -ItemType File
             } }
-    } -Force -PassThru
+    } -Force -PassThru |
     #endregion `.Build`
     #region `.Clear`
     Add-Member ScriptMethod Clear {
@@ -498,9 +498,9 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             Add-Member NoteProperty Fun $this -Force -PassThru
     
         if (-not $this.Jobs) {
-            $this | Add-Member NoteProperty Jobs @($newJob) -Force -PassThru
+            $this | Add-Member NoteProperty Jobs @($newJob) -Force
         } else {
-            $this.Jobs += $newJob
+            $null = $this.Jobs += $newJob
         }
         $newJob
     } -Force -PassThru
