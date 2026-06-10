@@ -8,6 +8,9 @@ Push-Location ($PSScriptRoot | Split-Path)
 New-GitHubWorkflow -Name "Build Fun" -On Push, PullRequest, Demand -Job PowerShellStaticAnalysis, 
     TestPowerShellOnLinux, 
     TagReleaseAndPublish, 
-    buildfun -OutputPath .\.github\workflows\BuildFun.yml
+    buildfun -OutputPath .\.github\workflows\BuildFun.yml  -Env ([Ordered]@{      
+        "REGISTRY" = "ghcr.io"
+        "IMAGE_NAME" = '${{ github.repository }}'
+    })
 
 Pop-Location
