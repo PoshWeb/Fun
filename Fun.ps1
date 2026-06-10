@@ -9,19 +9,45 @@
     We just write function that start with `/`.
     
     Then `Start-Fun`
+    
+    For example:
+
+    ~~~PowerShell
+    function / { 
+        "Hello From Fun", "Hi from Fun", "It's Fun" | Get-Random
+    }
+
+    Start-Fun
+    ~~~
+
+    Fun supports live reloading of functions.
+    
+    We can redefine functions at any time.
+
+    Functions run in our current context.
+    
+    This allows for fun interations between the browser and the terminal.    
 .NOTES
     .NOTES
     This is a fun experimental server in PowerShell.
 
-    It will functions named starting with `/` to a server path.
+    It is build atop a design pattern:
+
+    Any function starting with `/` will serve request.    
 
     Functions can be a local path or a wildcard of the url.
 
-    Whenever the url is visited, the first matching funtion will be run.
+    Whenever the url is visited, the funtion will be run.    
 
     Any query parameters will be automatically mapped to function parameters.
 
-    Functions run as the current user, with access to the current state.
+    You can write code with this pattern and not have `Fun`.
+
+    `Fun` just makes it fun.
+
+    By default, in `Fun`, functions run as the current user.
+    
+    They have access to the current state.
 
     This includes, but is not limited to:
 
@@ -30,7 +56,7 @@
     * The Current PowerShell Host
     * PowerShell Events
     
-    This allows for fun and unique server scenarios.  
+    This allows for fun and unique server scenarios.
     
     We can allow selective control over our terminal (and operating systems) from our browser.
 
@@ -40,6 +66,9 @@
 
     For these reasons, we want to run `Fun` locally on a random loopback port,
     or in a container with a constrained list of commands.
+
+    We also want to avoid code injection at all costs,
+    and only expose safe commands.    
 .EXAMPLE
     # Hello World server
     / { "<h1>hello world</h1>" }
@@ -53,11 +82,6 @@
     }
 
     (fun).Start()
-.EXAMPLE
-    # Hello World server
-    function /hello { param($message = 'hello world') $message } 
-
-    Start-Fun
 .EXAMPLE
     # Fun Website
     Get-Module Fun | 
@@ -118,14 +142,25 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
     Input      = $allInput
 }) |
     # Extend our output with a few script methods and properties
+    #region `.Clear`
+    Add-Member ScriptMethod Clear {
+        foreach ($func in $this.Functions) {
+            if ($func -is [Management.Automation.FunctionInfo]) {
+                Remove-Item "function:/$($func.Name)"
+            } elseif ($func -is [Management.Automation.AliasInfo]) {
+                Remove-Item "alias:/$($func.Name)"
+            }
+        }
+    } -Force -PassThru |
+    #endregion `.Clear
     #region `.Define`
     Add-Member ScriptProperty Define {
         <#
         .SYNOPSIS
-            Current endpoint definitions.
+            Define the Current endpoints.
         .DESCRIPTION
-            Returns the definition of all current endpoints
-        #>
+            Returns a script that will define of all current endpoints.
+        #>        
         [ScriptBlock]::Create(
             @(
                 foreach ($func in $this.Functions) {
@@ -145,8 +180,73 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 }
             ) -join [Environment]::NewLine
         )
-    } -Force -PassThru |    
-    #endregion `.Definition`
+    } -Force -PassThru |
+    #endregion `.Define`
+    #region `.JobScript`
+    Add-Member ScriptProperty JobScript { 
+        return {
+            # All we need to do is pass this object
+            param($this)
+            
+            # It will have a listener
+            $httpListener = $this.HttpListener
+            # and we can loop while it is listening
+            while ($httpListener.IsListening) {
+                # Get the next context
+                $getContext = $httpListener.GetContextAsync()
+                # and wait until it's ready
+                while (-not $getContext.Wait(13)) { }
+                $context = $getContext.Result
+                # If we don't yet have a counter
+                if (-not $this.Counter) {
+                    # create one.
+                    $this | 
+                        Add-Member NoteProperty Counter ([long]0) -Force
+                }
+                # Increment our counter
+                $this.Counter++
+                # And run our function
+                if ($this.Run) {
+                    try {
+                        $this.Run($context)
+                    } catch {
+                        $err = $_
+                        $context.Response.StatusCode = 400
+                        $context.Response.Close([Text.Encoding]::UTF8.GetBytes(
+                            "$err"
+                        ), $false)
+                        $err
+                    }                    
+                }
+            }
+        }
+    } -Force -PassThru |
+    #endregion `.JobScript`
+    #region `.Remove`
+    Add-Member ScriptMethod Remove {
+        param([string]$Wildcard)
+        if (-not $Wildcard) { return }
+        foreach ($func in $this.Functions) {
+            if ($func.Name -notlike $Wildcard) {
+                continue
+            }
+            if ($func -is [Management.Automation.FunctionInfo]) {
+                Remove-Item "function:/$($func.Name)"
+            } elseif ($func -is [Management.Automation.AliasInfo]) {
+                Remove-Item "alias:/$($func.Name)"
+            }
+        }
+    } -Force -PassThru |
+    #endregion `.Remove
+    #region `.RequestRate`
+    # We also want one script property that calculates a request rate
+    Add-Member ScriptProperty RequestRate {
+        # To do this we just take the counter
+        ($this.Counter -as [long]) /
+            # and divide by the number of minutes we have been running
+            ([DateTime]::Now - $this.CreatedAt).TotalMinutes
+    } -Force -PassThru |
+    #endregion `.RequestRate`
     #region `.Run`
     Add-Member ScriptMethod Run {
         <#
@@ -168,8 +268,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         $localPath =
             if ($request.Url.LocalPath) {
                 $request.Url.LocalPath
-            } else { $null }
-                    
+            } else { $null }                    
         
         # We want to match the url to a function.
         $functions = @(foreach ($function in @($this.Functions)) {
@@ -273,31 +372,36 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 # and send chunked responses.
                 $response.SendChunked = $true
                 # Get a pointer to the output stream for repeated use.
-                $outputStream = $response.OutputStream
+                $outputStream = $response.OutputStream                
+                $encoding = if ($request.ContentEncoding) {
+                    $request.ContentEncoding
+                } else {
+                    [Text.Encoding]::UTF8
+                }
             }
 
             process {
                 # Then we need to take each output object
-                $in = $_
+                $in = $_                
 
                 # If it is XML,
                 if ($in.OuterXml -and $outputStream.CanWrite) {
                     # write it out.
-                    $buffer = [Text.Encoding]::UTF8.GetBytes("$($in.OuterXml)")                    
+                    $buffer = $encoding.GetBytes("$($in.OuterXml)")
                     $outputStream.Write($buffer, 0, $buffer.Length)
-                    $outputStream.Flush()                    
+                    $outputStream.Flush()
                 }
                 # If it has an HTML property
                 elseif ($in.html -and $outputStream.CanWrite) {
                     # write that out
-                    $buffer = [Text.Encoding]::UTF8.GetBytes("$($in.html)")
+                    $buffer = $encoding.GetBytes("$($in.html)")
                     $outputStream.Write($buffer, 0, $buffer.Length)
                     $outputStream.Flush()
                 }
                 # Otherwise
                 elseif ($outputStream.CanWrite) {
                     # Stringify the result.
-                    $buffer = [Text.Encoding]::UTF8.GetBytes("$in")
+                    $buffer = $encoding.GetBytes("$in")
                     $outputStream.Write($buffer, 0, $buffer.Length)
                     $outputStream.Flush()
                 } else {
@@ -305,7 +409,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 }
             }
 
-            end {
+            end {                
                 # Close our response when the command is done
                 if ($response.Close) {
                     $response.Close()
@@ -326,9 +430,11 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             $err
         }
         
-    } -Force -PassThru |    
+    } -Force -PassThru |
+    #endregion `.Run`
+    #region `.Start`
     Add-Member ScriptMethod Start {
-        param([byte]$NodeCount = 1)
+        param()
         # In order to start the fun, we need an http listener
         if (-not $this.HttpListener) {
             # Attach this listener to this object
@@ -351,67 +457,38 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
        
         # Start the listener
-        $this.HttpListener.Start()
-
-        $listener = $this.HttpListener
-
-        # Write a warning so we know something is listening
-        Write-Warning "Listening on $($listener.Prefixes)"
-
-        # Now start our fun little server loop in a thread job.
+        if (-not $this.HttpListener.IsListening) {
+            # Write a warning so we know something is listening
+            Write-Warning "Listening on $($listener.Prefixes)"
+            $this.HttpListener.Start()
+        }
         
+        $listener = $this.HttpListener
+        
+        # Now start our fun little server loop in a thread job.        
         Start-ThreadJob -ScriptBlock $this.JobScript -ArgumentList $this -Name "$(
             $listener.Prefixes -replace '/$'
         )" -ThrottleLimit 16kb |
             Add-Member NoteProperty HttpListener $listener -Force -PassThru |
             Add-Member NoteProperty Fun $this -Force -PassThru
     
-    } -Force -PassThru | 
-    Add-Member ScriptProperty JobScript { 
-        return {
-            # All we need to do is pass this object
-            param($this)
-            
-            # It will have a listener
-            $httpListener = $this.HttpListener
-            # and we can loop while it is listening
-            while ($httpListener.IsListening) {
-                # Get the next context
-                $getContext = $httpListener.GetContextAsync()
-                # and wait until it's ready
-                while (-not $getContext.Wait(13)) { }
-                $context = $getContext.Result
-                # If we don't yet have a counter
-                if (-not $this.Counter) {
-                    # create one.
-                    $this | 
-                        Add-Member NoteProperty Counter ([long]0) -Force
-                }
-                # Increment our counter
-                $this.Counter++
-                # And run our function
-                if ($this.Run) {
-                    try {
-                        $this.Run($context)
-                    } catch {
-                        $err = $_
-                        $context.Response.StatusCode = 400
-                        $context.Response.Close([Text.Encoding]::UTF8.GetBytes(
-                            "$err"
-                        ), $false)
-                        $err
-                    }                    
-                }
-            }
-        }
     } -Force -PassThru |
-    # We also want one script property that calculates a request rate
-    Add-Member ScriptProperty RequestRate {
-        # To do this we just take the counter
-        ($this.Counter -as [long]) /
-            # and divide by the number of minutes we have been running
-            ([DateTime]::Now - $this.CreatedAt).TotalMinutes
+    #endregion `.Start`
+    #region `.StaticSite
+    Add-Member ScriptProperty StaticSite {
+        $this.Functions |
+            . { process {
+                $cmd = $_
+                if ($cmd.Name -notlike '*.*') { return }
+                $output = . $cmd
+                $path = Join-Path $pwd $cmd.Name
+                [Ordered]@{
+                    Path="./$($cmd.Name -replace "^/")"
+                    Value=$output -join [Environment]::NewLine
+                }
+            } }
     } -Force -PassThru
+    #endregion `.StaticSite
 
 
 $prefixArguments = $ArgumentList -match '^https?://'
