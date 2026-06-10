@@ -572,8 +572,8 @@ jobs:
     if: ${{ success() }}
     steps: 
       - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Log in to the Container registry (for main)
+        uses: actions/checkout@main
+      - name: Log in to the Container registry
         if: ${{github.ref_name == 'main' || github.ref_name == 'master' || github.ref_name == 'latest'}}
         uses: docker/login-action@master
         with: 
@@ -595,4 +595,6 @@ jobs:
           push: true
           tags: ${{ steps.metaMain.outputs.tags }}
           labels: ${{ steps.metaMain.outputs.labels }}
-
+env: 
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
