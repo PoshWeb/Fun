@@ -141,7 +141,32 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
     Arguments  = $ArgumentList
     Input      = $allInput
 }) |
-    # Extend our output with a few script methods and properties
+    # Extend our output with a script methods and properties
+    #region `.Build`
+    Add-Member ScriptMethod Build {
+        <#
+        .SYNOPSIS
+            Builds the server 
+        .DESCRIPTION
+            Builds the server into a static site.
+        
+            Will build any `/` function whose name is like *.*.
+        #>
+        param([string]$Path = $pwd)
+        $this.Functions |
+            . { process {
+                $cmd = $_
+                if ($cmd.Name -notlike '*.*') { return }
+                $output = . $cmd
+                $path = Join-Path $pwd $cmd.Name
+                $newFile = [Ordered]@{
+                    Path = Join-Path "." "./$($cmd.Name -replace "^/")"
+                    Value=$output -join [Environment]::NewLine
+                }
+                New-Item @newFile -Force -ItemType File
+            } }
+    } -Force -PassThru
+    #endregion `.Build`
     #region `.Clear`
     Add-Member ScriptMethod Clear {
         foreach ($func in $this.Functions) {
@@ -478,23 +503,8 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             $this.Jobs += $newJob
         }
         $newJob
-    } -Force -PassThru |
-    #endregion `.Start`
-    #region `.StaticSite
-    Add-Member ScriptProperty StaticSite {
-        $this.Functions |
-            . { process {
-                $cmd = $_
-                if ($cmd.Name -notlike '*.*') { return }
-                $output = . $cmd
-                $path = Join-Path $pwd $cmd.Name
-                [Ordered]@{
-                    Path="./$($cmd.Name -replace "^/")"
-                    Value=$output -join [Environment]::NewLine
-                }
-            } }
     } -Force -PassThru
-    #endregion `.StaticSite
+    #endregion `.Start`
 
 
 $prefixArguments = $ArgumentList -match '^https?://'
