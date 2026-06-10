@@ -459,19 +459,25 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         # Start the listener
         if (-not $this.HttpListener.IsListening) {
             # Write a warning so we know something is listening
-            Write-Warning "Listening on $($listener.Prefixes)"
+            Write-Warning "Listening on $($this.HttpListener.Prefixes)"
             $this.HttpListener.Start()
         }
         
         $listener = $this.HttpListener
         
         # Now start our fun little server loop in a thread job.        
-        Start-ThreadJob -ScriptBlock $this.JobScript -ArgumentList $this -Name "$(
+        $newJob = Start-ThreadJob -ScriptBlock $this.JobScript -ArgumentList $this -Name "$(
             $listener.Prefixes -replace '/$'
         )" -ThrottleLimit 16kb |
-            Add-Member NoteProperty HttpListener $listener -Force -PassThru |
+            Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
             Add-Member NoteProperty Fun $this -Force -PassThru
     
+        if (-not $this.Jobs) {
+            $this | Add-Member NoteProperty Jobs @($newJob) -Force -PassThru
+        } else {
+            $this.Jobs += $newJob
+        }
+        $newJob
     } -Force -PassThru |
     #endregion `.Start`
     #region `.StaticSite
