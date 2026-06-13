@@ -157,6 +157,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             . { process {
                 $cmd = $_
                 if ($cmd.Name -notlike '*.*') { return }
+                if ($cmd.Name -match '\*') { return }
                 $output = . $cmd
                 $path = Join-Path $pwd $cmd.Name
                 $newFile = [Ordered]@{
@@ -370,7 +371,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     $query[$queryParameter] = $query[$queryParameter] -match '^true'
                 }
             }
-        }
+        }        
         
         # Get the last matching function 
         $function = $functions[-1]
