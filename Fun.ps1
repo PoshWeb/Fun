@@ -288,6 +288,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         } else {
             $request, $response = $context.Request, $context.Response
         }
+        $Method = $request.HttpMethod
 
         # Use the local path if present
         $localPath =
@@ -351,7 +352,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
         
         # If the method is POST
-        if ($request.HttpMethod -eq 'POST' -and 
+        if ($Method -eq 'POST' -and 
             # and we are dealing with `x-www-form-urlencoded` form data
             $request.ContentType -eq 'application/x-www-form-urlencoded' -and
             # and we can read input
