@@ -139,7 +139,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
     # We will not need to watch for new commands, this variable will always have them.
     Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands('/*','Function,Alias', $true)    
     Arguments  = $ArgumentList
-    Input      = $allInput
+    Input      = $allInput    
 }) |
     # Extend our output with a script methods and properties
     #region `.Build`
@@ -241,7 +241,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                             "$err"
                         ), $false)
                         $err
-                    }                    
+                    }
                 }
             }
         }
@@ -293,10 +293,12 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         $localPath =
             if ($request.Url.LocalPath) {
                 $request.Url.LocalPath
-            } else { $null }                    
+            } else { $null }
         
         # We want to match the url to a function.
-        $functions = @(foreach ($function in @($this.Functions)) {
+        $functions = @($this.Functions)
+        
+        $functions = @(foreach ($function in $functions) {
             # We don't want to be too picky about ending slashes,
             # so remove them from our function name.
             $functionNameNoSlash = $function.Name -replace '/$'
@@ -324,7 +326,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             # so look for a function named the status code `(i.e. /404)
             $statusCodeFunction = @($this.functions -match "^/$($response.StatusCode)/?$")
             if ($statusCodeFunction) {
-                # If one existed, set `$functions` and call it normally. 
+                # If one existed, set `$functions` and call it normally.
                 $functions = $statusCodeFunction
             } else {
                 # Otherwise, close the response
@@ -344,6 +346,27 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 $query[$queryParameter] = $parsedQueryString[$queryParameter]
                 if ($query[$queryParameter] -match '^(true|false)$') {
                     $query[$queryParameter] = $query[$queryParameter] -match '^true' 
+                }
+            }
+        }
+        
+        # If the method is POST
+        if ($request.HttpMethod -eq 'POST' -and 
+            # and we are dealing with `x-www-form-urlencoded` form data
+            $request.ContentType -eq 'application/x-www-form-urlencoded' -and
+            # and we can read input
+            $request.InputStream.CanRead
+        ) {
+            # Read the input
+            $streamReader = [IO.StreamReader]::new($request.InputStream)
+            $inputBody = $streamReader.ReadToEnd()
+            $streamReader.Close()
+            $streamReader.Dispose()
+            $parsedQueryString = [Web.HttpUtility]::ParseQueryString($inputBody)
+            foreach ($queryParameter in $parsedQueryString.Keys) {
+                $query[$queryParameter] = $parsedQueryString[$queryParameter]
+                if ($query[$queryParameter] -match '^(true|false)$') {
+                    $query[$queryParameter] = $query[$queryParameter] -match '^true'
                 }
             }
         }
