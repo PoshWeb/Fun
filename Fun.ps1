@@ -289,7 +289,12 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         } else {
             $request, $response = $context.Request, $context.Response
         }
+        # Convenience variables:
+
+        # * `$Method` should contain the HttpMethod
         $Method = $request.HttpMethod
+        # * `$body` should contain the request body as a string        
+        $body = ''
 
         # Use the local path if present
         $localPath =
@@ -364,25 +369,53 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
         
         # If the method is POST
-        if ($Method -eq 'POST' -and 
-            # and we are dealing with `x-www-form-urlencoded` form data
-            $request.ContentType -eq 'application/x-www-form-urlencoded' -and
+        if ($Method -eq 'POST' -and             
             # and we can read input
             $request.InputStream.CanRead
         ) {
-            # Read the input
-            $streamReader = [IO.StreamReader]::new($request.InputStream)
-            $inputBody = $streamReader.ReadToEnd()
-            $streamReader.Close()
-            $streamReader.Dispose()
-            $parsedQueryString = [Web.HttpUtility]::ParseQueryString($inputBody)
-            foreach ($queryParameter in $parsedQueryString.Keys) {
-                $query[$queryParameter] = $parsedQueryString[$queryParameter]
-                if ($query[$queryParameter] -match '^(true|false)$') {
-                    $query[$queryParameter] = $query[$queryParameter] -match '^true'
+            # and we are dealing with `x-www-form-urlencoded` form data
+            if (
+                $request.ContentType -eq 'application/x-www-form-urlencoded'
+            ) {
+                $streamReader = [IO.StreamReader]::new($request.InputStream)
+                $Body = $streamReader.ReadToEnd()
+                $streamReader.Close()
+                $streamReader.Dispose()
+                # Read the input            
+                $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Body)
+                foreach ($queryParameter in $parsedQueryString.Keys) {
+                    $query[$queryParameter] = $parsedQueryString[$queryParameter]
+                    if ($query[$queryParameter] -match '^(true|false)$') {
+                        $query[$queryParameter] = $query[$queryParameter] -match '^true'
+                    }
                 }
             }
-        }        
+            elseif (
+                $request.ContentType -eq 'application/json'
+            ) {
+                $streamReader = [IO.StreamReader]::new($request.InputStream)
+                $Body = $streamReader.ReadToEnd()
+                $streamReader.Close()
+                $streamReader.Dispose()
+
+                try {
+                    $parsedBody = ConvertFrom-Json -InputObject $body -AsHashtable
+                    foreach ($key in $parsedBody.Keys) {
+                        $query[$key] = $parsedBody[$key]
+                        if ($query[$key] -match '^(true|false)$') {
+                            $query[$key] = $query[$key] -match '^true'
+                        }   
+                    }
+                } catch {
+                    $ex = $_
+                    $response.StatusCode = 400
+                    $response.Close([Text.Encoding]::UTF8.GetBytes(
+                        "$ex"
+                    ), $false)
+                    return
+                }
+            }
+        }
         
         # Get the last matching function 
         $function = $functions[-1]
