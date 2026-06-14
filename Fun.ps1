@@ -156,7 +156,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         $this.Functions |
             . { process {
                 $cmd = $_
-                if ($cmd.Name -notlike '*.*') { return }
+                if ($cmd.Name -notlike '*.*') { return }                
                 if ($cmd.Name -match '\*') { return }
                 $output = . $cmd
                 $path = Join-Path $pwd $cmd.Name
@@ -299,31 +299,42 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         
         # We want to match the url to a function.
         $functions = @($this.Functions)
+                
+        $exactMatch = 
+            $functions -match "^(?>$(
+                [Regex]::Escape(($request.Url.DnsSafeHost, $request.Url.LocalPath -join '/')),
+                    [Regex]::Escape($request.Url.LocalPath) -join '|'            
+            ))/?$"
         
-        $functions = @(foreach ($function in $functions) {
-            # We don't want to be too picky about ending slashes,
-            # so remove them from our function name.
-            $functionNameNoSlash = $function.Name -replace '/$'
-            if (
-                # If the local path is like our function name
-                $localPath -and 
-                    (
-                        # we've found our function
-                        $localPath -replace '/$' -like $functionNameNoSlash
-                    )
-            ) {
-                # Break after the first function we find.
-                $function
-                break
-            }
-        })
+        [Array]::Reverse($functions)
 
+        $functions = @(            
+            if ($exactMatch) {
+                $exactMatch
+            } else {
+                foreach ($function in $functions) {
+                    # We don't want to be too picky about ending slashes,
+                    # so remove them from our function name.
+                    $functionNameNoSlash = $function.Name -replace '/$'
+                    if (
+                        # If the local path is like our function name
+                        $localPath -and (
+                            # we've found our function
+                            $localPath -replace '/$' -like $functionNameNoSlash
+                        )
+                    ) {
+                        # Break after the first function we find.
+                        $function
+                        break
+                    }
+                }
+            }
+        )
+                
         # If there were no found functions
         if (-not $functions) {
             # We're going to send a 404.
-            if ($response.StatusCode) {
-                $response.StatusCode = 404
-            }
+            if ($response.StatusCode) { $response.StatusCode = 404 }
             # We want that 404 to be customizable,
             # so look for a function named the status code `(i.e. /404)
             $statusCodeFunction = @($this.functions -match "^/$($response.StatusCode)/?$")
