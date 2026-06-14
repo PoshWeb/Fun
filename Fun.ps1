@@ -137,7 +137,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
     CreatedAt  = [DateTime]::Now
     # Fun fact: this kind of enumeration is always up to date
     # We will not need to watch for new commands, this variable will always have them.
-    Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands('/*','Function,Alias', $true)    
+    Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands('*/*','Function,Alias', $true)
     Arguments  = $ArgumentList
     Input      = $allInput    
 }) |
@@ -253,9 +253,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         param([string]$Wildcard)
         if (-not $Wildcard) { return }
         foreach ($func in $this.Functions) {
-            if ($func.Name -notlike $Wildcard) {
-                continue
-            }
+            if ($func.Name -notlike $Wildcard) { continue }
             if ($func -is [Management.Automation.FunctionInfo]) {
                 Remove-Item "function:/$($func.Name)"
             } elseif ($func -is [Management.Automation.AliasInfo]) {
@@ -304,18 +302,30 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         
         # We want to match the url to a function.
         $functions = @($this.Functions)
-                
-        $exactMatch = 
-            $functions -match "^(?>$(
-                [Regex]::Escape(($request.Url.DnsSafeHost, $request.Url.LocalPath -join '/')),
-                    [Regex]::Escape($request.Url.LocalPath) -join '|'            
-            ))/?$"
-        
-        [Array]::Reverse($functions)
+            
+        # We can have one of three possible names
+        $exactNames = @(
+            # Fully qualified (i.e `function http://127.0.0.1/ {}` )
+            $request.Url.Scheme,'://',
+                $request.Url.DnsSafeHost,
+                    $request.Url.LocalPath -join ''
+            # Host qualified (i.e `function example.com/ {}` )
+            $request.Url.DnsSafeHost, 
+                $request.Url.LocalPath -join ''
+            # Locally qualified (i.e. `function / {} ) 
+            $request.Url.LocalPath
+        )                    
 
-        $functions = @(            
-            if ($exactMatch) {
-                $exactMatch
+        $exactMatches = # Simply -match the function to the exact names
+            @($functions -match "^(?>$(
+                @(foreach ($exactName in $exactNames) {
+                    [Regex]::Escape($exactName)
+                }) -join '|'
+            ))/?$")        
+            
+        $functions = @(
+            if ($exactMatches) {
+                $exactMatches[0]
             } else {
                 foreach ($function in $functions) {
                     # We don't want to be too picky about ending slashes,
@@ -335,6 +345,9 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 }
             }
         )
+
+        # Get the last matching function 
+        $function = $functions[-1]
                 
         # If there were no found functions
         if (-not $functions) {
@@ -415,10 +428,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     return
                 }
             }
-        }
-        
-        # Get the last matching function 
-        $function = $functions[-1]
+        }    
 
         # And use its command metadata to find all possible parameters
         $functionParameterMap = @{}
@@ -442,9 +452,8 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
 
         # If the function had an output type like `*/*`
-        if ($function.OutputType.Name -like '*/*' -and
-            $response.OutputStream
-        ) {            
+        if ($function.OutputType.Name -like '*/*' -and 
+            $response.OutputStream) {
             foreach ($outputType in $function.OutputType) {
                 if ($outputType.Name -like '*/*') {
                     # this will become the response content type
@@ -453,12 +462,13 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 }
             }
         }
+
         # If we do not have an output type
         if (-not $function.OutputType) {
             # default to `text/html`
             $response.ContentType = 'text/html'
         }
-
+        
         $functionOutput = {
             begin {
                 # To stream output, we need to set the protocol version
