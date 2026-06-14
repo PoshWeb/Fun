@@ -368,11 +368,10 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
 
         # To add to the fun, we want our functions to take parameters
         $query = [Ordered]@{}
-        # If the request had a query
+        # If the request had a query, parse it.
         if ($request.Url.Query) {
-            # parse it
             $parsedQueryString = [Web.HttpUtility]::ParseQueryString($request.Url.Query)
-            # and copy over our parameters.
+            # Then copy over our parameters.
             foreach ($queryParameter in $parsedQueryString.Keys) {
                 $query[$queryParameter] = $parsedQueryString[$queryParameter]
                 if ($query[$queryParameter] -match '^(true|false)$') {
@@ -382,7 +381,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
         
         # If the method is POST
-        if ($Method -eq 'POST' -and             
+        if ($Method -eq 'POST' -and
             # and we can read input
             $request.InputStream.CanRead
         ) {
@@ -390,10 +389,9 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             if (
                 $request.ContentType -eq 'application/x-www-form-urlencoded'
             ) {
-                $streamReader = [IO.StreamReader]::new($request.InputStream)
-                $Body = $streamReader.ReadToEnd()
-                $streamReader.Close()
-                $streamReader.Dispose()
+                $reader = [IO.StreamReader]::new($request.InputStream)
+                $Body = $reader.ReadToEnd()
+                $reader.Close(),$reader.Dispose()
                 # Read the input            
                 $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Body)
                 foreach ($queryParameter in $parsedQueryString.Keys) {
@@ -403,13 +401,10 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     }
                 }
             }
-            elseif (
-                $request.ContentType -eq 'application/json'
-            ) {
-                $streamReader = [IO.StreamReader]::new($request.InputStream)
-                $Body = $streamReader.ReadToEnd()
-                $streamReader.Close()
-                $streamReader.Dispose()
+            elseif ($request.ContentType -eq 'application/json') {
+                $reader = [IO.StreamReader]::new($request.InputStream)
+                $Body = $reader.ReadToEnd()
+                $reader.Close(),$reader.Dispose()
 
                 try {
                     $parsedBody = ConvertFrom-Json -InputObject $body -AsHashtable
@@ -417,7 +412,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                         $query[$key] = $parsedBody[$key]
                         if ($query[$key] -match '^(true|false)$') {
                             $query[$key] = $query[$key] -match '^true'
-                        }   
+                        }
                     }
                 } catch {
                     $ex = $_
@@ -432,7 +427,9 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
 
         # And use its command metadata to find all possible parameters
         $functionParameterMap = @{}
-        foreach ($parameter in ($function -as [Management.Automation.CommandMetadata]).Parameters.Values) {
+        foreach ($parameter in (
+            $function -as [Management.Automation.CommandMetadata]
+        ).Parameters.Values) {
             $functionParameterMap[$parameter.Name] = $parameter
             foreach ($alias in $parameter.Aliases) {
                 $functionParameterMap[$alias] = $parameter
@@ -468,56 +465,85 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             # default to `text/html`
             $response.ContentType = 'text/html'
         }
+
+        $encoding =
+            if ($request.ContentEncoding) {$request.ContentEncoding }
+            else { [Text.Encoding]::UTF8 }
         
-        $functionOutput = {
-            begin {
-                # To stream output, we need to set the protocol version
-                $response.ProtocolVersion = '1.1'
-                # and send chunked responses.
-                $response.SendChunked = $true
-                # Get a pointer to the output stream for repeated use.
-                $outputStream = $response.OutputStream                
-                $encoding = if ($request.ContentEncoding) {
-                    $request.ContentEncoding
-                } else {
-                    [Text.Encoding]::UTF8
+        # We do not always want to stream content
+        if ($(
+            # we should only stream responses if `$this`
+            # or the `$function` say so.
+            :shouldStream foreach ($target in $this, $function) {
+                # We can request streaming with `Stream`, `Streaming`, or `Chunked`.
+                foreach ($name in 'Stream', 'Streaming', 'Chunked') {
+                    if ($target.$Name) { $true; break shouldStream}
                 }
             }
-
-            process {
-                # Then we need to take each output object
-                $in = $_                
-
-                # If it is XML,
-                if ($in.OuterXml -and $outputStream.CanWrite) {
-                    # write it out.
-                    $buffer = $encoding.GetBytes("$($in.OuterXml)")
-                    $outputStream.Write($buffer, 0, $buffer.Length)
-                    $outputStream.Flush()
+        )) {            
+            $functionOutput = {
+                begin {
+                    # To stream output, we need to set the protocol version
+                    $response.ProtocolVersion = '1.1'
+                    # and send chunked responses.
+                    $response.SendChunked = $true
+                    # Get a pointer to the output stream for repeated use.
+                    $outputStream = $response.OutputStream                    
                 }
-                # If it has an HTML property
-                elseif ($in.html -and $outputStream.CanWrite) {
-                    # write that out
-                    $buffer = $encoding.GetBytes("$($in.html)")
-                    $outputStream.Write($buffer, 0, $buffer.Length)
-                    $outputStream.Flush()
+
+                process {
+                    # Then we need to take each output object
+                    $in = $_                
+
+                    # If it is XML,
+                    if ($in.OuterXml -and $outputStream.CanWrite) {
+                        # write it out.
+                        $buffer = $encoding.GetBytes("$($in.OuterXml)")
+                        $outputStream.Write($buffer, 0, $buffer.Length)
+                        $outputStream.Flush()
+                    }
+                    # If it has an HTML property
+                    elseif ($in.html -and $outputStream.CanWrite) {
+                        # write that out
+                        $buffer = $encoding.GetBytes("$($in.html)")
+                        $outputStream.Write($buffer, 0, $buffer.Length)
+                        $outputStream.Flush()
+                    }
+                    # Otherwise
+                    elseif ($outputStream.CanWrite) {
+                        # Stringify the result.
+                        $buffer = $encoding.GetBytes("$in")
+                        $outputStream.Write($buffer, 0, $buffer.Length)
+                        $outputStream.Flush()
+                    } else {
+                        $in
+                    }
                 }
-                # Otherwise
-                elseif ($outputStream.CanWrite) {
-                    # Stringify the result.
-                    $buffer = $encoding.GetBytes("$in")
-                    $outputStream.Write($buffer, 0, $buffer.Length)
-                    $outputStream.Flush()
-                } else {
-                    $in
+
+                end {                
+                    # Close our response when the command is done
+                    if ($response.Close) {
+                        $response.Close()
+                    }
                 }
             }
-
-            end {                
-                # Close our response when the command is done
-                if ($response.Close) {
-                    $response.Close()
-                }
+        } else {
+            # If we are not going to stream our output is more simple
+            $FunctionOutput = {                
+                # Close the response
+                $response.Close(
+                    # with a buffer holding all the output
+                    $encoding.GetBytes((@(
+                        foreach ($in in $input) {
+                            $inXml = $in.OuterXml
+                            if ($inXml) {"$inXml"}
+                            elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
+                            else {"$in"}
+                        }
+                    ) -join '')),
+                    
+                    $false
+                )
             }
         }
 
@@ -533,7 +559,6 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             ), $false)
             $err
         }
-        
     } -Force -PassThru |
     #endregion `.Run`
     #region `.Start`
@@ -542,16 +567,15 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         # In order to start the fun, we need an http listener
         if (-not $this.HttpListener) {
             # Attach this listener to this object
-            $this | 
-                Add-Member NoteProperty HttpListener (
-                    [Net.HttpListener]::new()
-                ) -Force
+            $this | Add-Member NoteProperty HttpListener (
+                [Net.HttpListener]::new()
+            ) -Force
             # If we have any prefixes, add them
             if ($this.Prefixes) {
                 foreach ($prefix in $this.Prefixes) {
                     $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
                     $this.HttpListener.Prefixes.Add($httpPrefix)
-                }                
+                }
             } else {
                 # Otherwise, pick a random local loopback port
                 $this.HttpListener.Prefixes.Add(
@@ -562,17 +586,20 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
        
         # Start the listener
         if (-not $this.HttpListener.IsListening) {
-            # Write a warning so we know something is listening
+            # and warn that something is listening
             Write-Warning "Listening on $($this.HttpListener.Prefixes)"
             $this.HttpListener.Start()
         }
         
-        $listener = $this.HttpListener
-        
-        # Now start our fun little server loop in a thread job.        
-        $newJob = Start-ThreadJob -ScriptBlock $this.JobScript -ArgumentList $this -Name "$(
-            $listener.Prefixes -replace '/$'
-        )" -ThrottleLimit 16kb |
+        # Now start our fun little server loop in a thread job.
+        $newJob = [Ordered]@{
+            ScriptBlock = $this.JobScript
+            ArgumentList = $this
+            Name = "$($this.HttpListener.Prefixes -replace '/$')"
+            ThrottleLimit = 16kb
+        }
+
+        $newJob = Start-ThreadJob @newJob |
             Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
             Add-Member NoteProperty Fun $this -Force -PassThru
     
