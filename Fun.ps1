@@ -28,7 +28,6 @@
     
     This allows for fun interations between the browser and the terminal.    
 .NOTES
-    .NOTES
     This is a fun experimental server in PowerShell.
 
     It is build atop a design pattern:
@@ -67,8 +66,11 @@
     For these reasons, we want to run `Fun` locally on a random loopback port,
     or in a container with a constrained list of commands.
 
-    We also want to avoid code injection at all costs,
-    and only expose safe commands.    
+    We also want to avoid code injection at all costs, and only expose safe commands.
+    
+    Fun also allows you to redefine how it serves content and outputs results.
+
+    You should not need to do this in most scenarios, but it can be fun to mod an engine.
 .EXAMPLE
     # Hello World server
     / { "<h1>hello world</h1>" }
@@ -114,7 +116,282 @@ $ArgumentList,
 [Parameter(ValueFromPipeline)]
 [Alias('Input')]
 [PSObject]
-$InputObject
+$InputObject,
+
+# If set, will not allow websocket requests.
+# Requests to websockets will return 405 - Method Not Allowed.
+[switch]
+$NoWebSocket,
+
+# If set, will stream responses.
+# This will stream output from running commands
+[switch]
+$Stream,
+
+# The size of websocket buffers.
+# This is the maximum size of a message sent to a websocket.
+[uint32]
+$BufferSize = 64kb,
+
+# The depth used to serialize websocket responses to json.
+[ValidateRange(1,100)]
+[byte]
+$JsonDepth = 5,
+
+# The Script Block used to route requests
+# This accepts a url as the first argument,
+# and all other arguments as functions.
+# It should return the function that best matches the url.
+[ScriptBlock]
+$Router = {
+    param()
+    $url, $functions = $args
+    if (-not $url) { return }
+    # We can have one of three possible names
+    $exactNames = @(
+        # Fully qualified (i.e `function http://127.0.0.1/ {}` )
+        $url.Scheme,'://',
+            $url.DnsSafeHost,
+                $url.LocalPath -join ''
+        # Host qualified (i.e `function example.com/ {}` )
+        $url.DnsSafeHost, 
+            $url.LocalPath -join ''
+        # Scheme qualified (i.e. `function http:// {}` ) 
+        $url.Scheme,':/',
+            $url.LocalPath -join ''
+        # Locally qualified (i.e. `function / {} ) 
+        $url.LocalPath
+    )
+    
+    $localPath = $url.LocalPath
+
+    [Array]::Reverse($functions)
+
+    $exactMatches = # Simply -match the function to the exact names
+        @(@($functions) -match "^(?>$(
+            @(foreach ($exactName in $exactNames) {
+                [Regex]::Escape($exactName)
+            }) -join '|'
+        ))/?$")
+                
+    return @(
+        if ($exactMatches) {
+            $exactMatches[0]
+        } else {
+            foreach ($function in $functions) {
+                # We don't want to be too picky about ending slashes,
+                # so remove them from our function name.
+                $functionNameNoSlash = $function.Name -replace '/$'
+                if (
+                    # If the local path is like our function name
+                    $localPath -and (
+                        # we've found our function
+                        $localPath -replace '/$' -like $functionNameNoSlash
+                    )
+                ) {
+                    # Break after the first function we find.
+                    $function
+                    break
+                }
+            }
+        }
+    )
+},
+
+
+# A script block used to output http requests.
+[ScriptBlock]
+$HttpOutput = {
+    # CGI requests just need to close
+    $response.Close(
+        # with a buffer holding all the output
+        $encoding.GetBytes((@(
+            foreach ($in in @($input)) {
+                $inXml = $in.OuterXml
+                if ($inXml) {"$inXml"}
+                elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
+                else {"$in"}
+            }
+        ) -join '')),
+        $false
+    )
+},
+
+# A script block used to stream http outputs.
+# This will be used when `-Streaming` output. 
+[ScriptBlock]
+$HttpStreamOutput = {
+    # If we are streaming a CGI request
+    begin {
+        # We need to set the protocol version
+        $response.ProtocolVersion = '1.1'
+        # and send chunked responses.
+        $response.SendChunked = $true
+        $outputStream = $response.OutputStream
+    }
+    process {
+        # Then we output each object
+        $in = $_                        
+        if ($outputStream.CanWrite) {
+            $buffer = $encoding.GetBytes(
+                $(
+                    $inXml = $in.OuterXml
+                    if ($inXml) {"$inXml"}
+                    elseif (
+                        $($inHtml = $in.html;$inHtml)
+                    ) {"$inHtml"}
+                    else {"$in"}
+                )
+            )
+            $outputStream.Write($buffer, 0, $buffer.Length)
+            $outputStream.Flush()
+        } else {
+            # If there was no output stream, emit the result.
+            $in
+        }
+    }
+    end {
+        # Close our response when the command is done
+        if ($response.Close) {$response.Close()}
+    }
+},
+
+# The server script.
+# This should listen for requests and `.Run` with that context.
+[ScriptBlock]
+$ServerScript = {
+    param($this)
+    # It will have a listener
+    $httpListener = $this.HttpListener
+    
+    # and we can loop while it is listening
+    if (-not $this.Counter) {            
+        $this | Add-Member NoteProperty Counter ([long]0) -Force
+    }
+    
+    while ($httpListener.IsListening) {
+        # Get the next context
+        $getContext = $httpListener.GetContextAsync()
+        # and wait until it's ready
+        while (-not $getContext.Wait(11)) { }
+        $context = $getContext.Result        
+        # Run our function
+        # If we don't yet have a counter, create one.
+        $request, $response = $context.Request, $context.Response
+        
+        # Increment our counter
+        $this.Counter++
+
+        try {
+            $this.Run($context)
+        } catch {
+            $err = $_
+            $response.StatusCode = 400
+            $response.Close([Text.Encoding]::UTF8.GetBytes(
+                "$err"
+            ), $false)
+            $err
+        }        
+    }
+},
+
+# The Socket Job.
+# This will run whenever a new socket is created.
+# It should listen to results from that socket and output them
+# It should run any functions associated with the socket and reply with their output.
+[ScriptBlock]
+$SocketJob = {
+    param($this, $socketInfo)
+    $webSocket = $socketInfo.WebSocket
+    $context = $socketInfo.Context
+    $request, $response = $context.Request, $context.Response
+    $url = $Request.Url
+    
+    # This loop will run as long as the websocket is open.
+    :WebSocketMessageLoop while ($websocket.State -eq 'Open') {
+        # Websockets fill a buffer of memory        
+        $Buffer = [byte[]]::new($this.BufferSize)        
+        # Get a segment containing our buffer
+        $Segment = [ArraySegment[byte]]::new($Buffer)
+        # and await the next message.
+        $receivingWebSocket = $webSocket.ReceiveAsync(
+            $Segment, [Threading.CancellationToken]::None
+        )
+        
+        # use this tight loop to let us cancel the await if we need to.
+        while (-not $receivingWebSocket.Wait(11)) {}
+        
+        # If we had a problem, write an error.
+        if ($receivingWebSocket.Exception) {
+            Write-Error -Exception $receivingWebSocket.Exception -Category ProtocolError
+            continue
+        }
+        
+        # At this point we should have a json message, in UTF8
+        $encoding = [Text.Encoding]::UTF8        
+        try {                
+            # WebSocket buffers are "old school" null terminated strings
+            # So let's find the null terminator (the first 0)
+            $nullTerminator = $Buffer.IndexOf([byte]0)
+            # and let's get the message.
+            $messageString = if ($nullTerminator -ge 0) {
+                $encoding.GetString($Buffer, 0, $nullTerminator)
+            } else {
+                $encoding.GetString($Buffer, 0, $Buffer.Length)
+            }
+            
+            # Now let's convert it from json
+            $socketMessage = 
+                if ($messageString) {
+                    try {
+                        ConvertFrom-Json -InputObject $messageString
+                    } catch {
+                        # if we could not, treat it as plain text.
+                        "$messageString"
+                    }
+                } else { $null }
+            
+            if ($socketMessage) {
+                $socketMessage
+                $this.Run($socketInfo, $socketMessage)
+            } else {
+                $this.Run($socketInfo)
+            }                
+        } catch {
+            Write-Error $_
+        }
+    }
+},
+
+# The WebSocket Output.
+# This will be called to output a result to a websocket.
+[ScriptBlock]
+$WebSocketOutput = {
+    $out = @($input) # Websockets just need to take all output
+    if ($out.Length -eq 1) { $out = $out[0] }
+    # and send it down the wire as json
+    $webSocket.SendAsync(
+        [ArraySegment[byte]]::new($encoding.GetBytes(
+            (ConvertTo-Json -InputObject $out -Depth $JsonDepth)
+        )
+    ), 'Text', $true, [Threading.CancellationToken]::None)
+},
+
+# The WebSocket streaming output.
+# This will be called to output a series of results to a websocket.
+[ScriptBlock]
+$WebSocketStreamOutput = {
+    process {
+        $out = @($_) # take each output
+        if ($out.Length -eq 1) { $out = $out[0] }
+        # and send it directly along to the socket.
+        $webSocket.SendAsync(
+            [ArraySegment[byte]]::new($encoding.GetBytes(
+                (ConvertTo-Json -InputObject $out -Depth $JsonDepth)
+            )
+        ), 'Text', $true, [Threading.CancellationToken]::None)
+    }
+}
 )
 
 # This function is designed to be pretty performant,
@@ -126,23 +403,30 @@ if (-not $allInput -and $InputObject) {
 }
 
 # We will be outputting a custom object named after ourself
-$myTypeName = 
-    $MyInvocation.MyCommand.Name -replace 
+$myTypeName =
+    $MyInvocation.MyCommand.Name -replace
         '\.ps1$' -replace '^.+?-' # (replacing the extension and any verb)
 
-Update-TypeData -TypeName $myTypeName -Force -DefaultDisplayPropertySet 'CreatedAt','RequestRate','Functions'
-# Create our output object
-$outputObject = New-Object PSObject -Property ([Ordered]@{
-    PSTypeName = $myTypeName
-    CreatedAt  = [DateTime]::Now
-    # Fun fact: this kind of enumeration is always up to date
-    # We will not need to watch for new commands, this variable will always have them.
-    Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands('*/*','Function,Alias', $true)
-    Arguments  = $ArgumentList
-    Input      = $allInput    
-}) |
-    # Extend our output with a script methods and properties
-    #region `.Build`
+Update-TypeData -TypeName $myTypeName -Force -DefaultDisplayPropertySet 'CreatedAt','Prefix','Functions'
+
+# Create a dictionary for our output object
+$output = [Ordered]@{PSTypeName = $myTypeName}
+foreach ($key in $MyInvocation.MyCommand.Parameters.Keys) {
+    $var = $ExecutionContext.SessionState.PSVariable.get($key)
+    if ($var) { $output[$key] = $var.Value }
+}
+
+# Initialize it with a number of functions
+$output.CreatedAt  = [DateTime]::Now
+$output.Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands(
+    '*/*','Function,Alias', $true
+)
+$output.Arguments  = $ArgumentList
+$output.Input      = $allInput
+
+# Create our object and extend it
+$outputObject = New-Object PSObject -Property $output |
+    #region `.Build()`
     Add-Member ScriptMethod Build {
         <#
         .SYNOPSIS
@@ -159,15 +443,16 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 if ($cmd.Name -notlike '*.*') { return }                
                 if ($cmd.Name -match '\*') { return }
                 $output = . $cmd
-                $path = Join-Path $pwd $cmd.Name
+                $path =  Join-Path "." "./$($cmd.Name -replace "^/")"
                 $newFile = [Ordered]@{
-                    Path = Join-Path "." "./$($cmd.Name -replace "^/")"
+                    Path = $path
                     Value=$output -join [Environment]::NewLine
                 }
                 New-Item @newFile -Force -ItemType File
             } }
     } -Force -PassThru |
     #endregion `.Build`
+       
     #region `.Clear`
     Add-Member ScriptMethod Clear {
         foreach ($func in $this.Functions) {
@@ -178,7 +463,17 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             }
         }
     } -Force -PassThru |
-    #endregion `.Clear
+    #endregion `.Clear`
+    #region `.Prefix`
+    Add-Member ScriptProperty Prefix {
+        if ($this.HttpListener.Prefixes.Length -eq 1) {
+            $this.HttpListener.Prefixes[0]
+        } else {
+            $this.HttpListener.Prefixes
+        }
+    } -Force -PassThru |
+    #endregion `.Prefix
+   
     #region `.Define`
     Add-Member ScriptProperty Define {
         <#
@@ -193,9 +488,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     if ($func -is [Management.Automation.FunctionInfo]) {
                         "function $func {$(
                             $func.ScriptBlock
-                        )$(
-                            [Environment]::NewLine
-                        )}"
+                        )$([Environment]::NewLine)}"
                     } elseif ($func -is [Management.Automation.AliasInfo]) {
                         "Set-Alias '$(
                             $func.Name -replace "'","''"
@@ -208,46 +501,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         )
     } -Force -PassThru |
     #endregion `.Define`
-    #region `.JobScript`
-    Add-Member ScriptProperty JobScript { 
-        return {
-            # All we need to do is pass this object
-            param($this)
-            
-            # It will have a listener
-            $httpListener = $this.HttpListener
-            # and we can loop while it is listening
-            while ($httpListener.IsListening) {
-                # Get the next context
-                $getContext = $httpListener.GetContextAsync()
-                # and wait until it's ready
-                while (-not $getContext.Wait(13)) { }
-                $context = $getContext.Result
-                # If we don't yet have a counter
-                if (-not $this.Counter) {
-                    # create one.
-                    $this | 
-                        Add-Member NoteProperty Counter ([long]0) -Force
-                }
-                # Increment our counter
-                $this.Counter++
-                # And run our function
-                if ($this.Run) {
-                    try {
-                        $this.Run($context)
-                    } catch {
-                        $err = $_
-                        $context.Response.StatusCode = 400
-                        $context.Response.Close([Text.Encoding]::UTF8.GetBytes(
-                            "$err"
-                        ), $false)
-                        $err
-                    }
-                }
-            }
-        }
-    } -Force -PassThru |
-    #endregion `.JobScript`
+        
     #region `.Remove`
     Add-Member ScriptMethod Remove {
         param([string]$Wildcard)
@@ -262,6 +516,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
     } -Force -PassThru |
     #endregion `.Remove
+
     #region `.RequestRate`
     # We also want one script property that calculates a request rate
     Add-Member ScriptProperty RequestRate {
@@ -271,86 +526,132 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             ([DateTime]::Now - $this.CreatedAt).TotalMinutes
     } -Force -PassThru |
     #endregion `.RequestRate`
+    
     #region `.Run`
     Add-Member ScriptMethod Run {
         <#
         .SYNOPSIS
             Run in a context
         .DESCRIPTION
-            Run the function in a context
+            Run the function in http request context or websocket context
         #>
-        param($context)
+        param($context, $data)
 
         # Allow for mock requests by enabling casting to uris
         if ($context -as [uri]) {
             $request = [Ordered]@{HttpMethod='Get';Url = $context -as [uri]}
+        } elseif ($context.context) {
+            $request, $response = $context.Context.Request, $context.Context.Response
         } else {
             $request, $response = $context.Request, $context.Response
         }
-        # Convenience variables:
+        
+        # WebSocket handshake requests should be specially handled before we route to a function.
+        if ($Request.IsWebSocketRequest -and -not $context.WebSocket) {
+            if ($this.NoWebSocket) {
+                # Method not allowed
+                $response.StatusCode = 405
+                $response.Close()
+            }
+            # We need to call the `AcceptWebSocketAsync` method to upgrade the connection.
+            $acceptWebSocket = $context.AcceptWebSocketAsync('json')
+            # We'll .Wait until the upgrade is finished.
+            while (-not $acceptWebSocket.Wait(11)) { }
+            # If it fails,
+            if ($acceptWebSocket.IsFaulted) {
+                # we will write an error and return.
+                Write-Error -Exception $acceptWebSocket.Exception -Category ProtocolError
+                return
+            }
+            # If it succeeds, capture the result.
+            $webSocketResult = try { $acceptWebSocket.Result } catch { $_ }
 
+            # If we do not have any sockets on this object
+            if (-not $this.Sockets) {
+                # create a dictionary to hold them.
+                $this | Add-Member NoteProperty Sockets ([Ordered]@{}) -Force
+            }
+
+            # If we do not have any sockets on this url
+            if (-not $this.Sockets[$request.Url]) {
+                # create a list
+                $this.Sockets[$request.Url] = @()
+            }
+            
+            # Prepare our socket info.
+            # This contains the initial request as well as web socket context.
+            $socketInfo = ([PSCustomObject]@{
+                Context = $context
+                Request = $request
+                Response = $response
+                WebSocket = $webSocketResult.WebSocket
+                WebSocketContext = $webSocketResult
+            })
+
+            $request |
+                Add-Member NoteProperty Url (                    
+                    ($request.Url -replace '^http', 'ws') -as [uri]
+                ) -Force
+            
+            # Each websocket runs in its own thread job
+            $socketJob = Start-ThreadJob -Name "$(
+                $request.Url
+            )" -ScriptBlock $this.SocketJob -ArgumentList $this, $socketInfo -ThrottleLimit 32kb  |
+                Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
+                Add-Member NoteProperty SocketInfo $socketInfo -Force -PassThru |
+                Add-Member NoteProperty WebSocket $socketInfo.WebSocket -Force -PassThru |
+                Add-Member NoteProperty Fun $this -Force -PassThru
+            
+            $urlString = "$($request.Url)"
+            $this.Sockets[$urlString] += $socketJob
+
+            # While we're here, might as well clean up finished socket jobs.
+            $toRemove = @()
+            $this.Sockets[$urlString] = # Make one pass thru all sockets to this url
+                @(foreach ($socket in $this.Sockets[$urlString]) {
+                    # If they are not completed or failed
+                    if ($socket.State -notin 'Completed', 'Failed') {
+                        $socket # keep it in the list
+                    } else {
+                        # otherwise, mark it for removal
+                        $toRemove += $socket
+                    }
+                })
+
+            # Remove only the jobs that completed without error.
+            $toRemove | Where-Object State -ne 'Failed' | Remove-Job
+            # Either way, return the socket job.
+            return $socketJob
+        }
+        
         # * `$Method` should contain the HttpMethod
         $Method = $request.HttpMethod
-        # * `$body` should contain the request body as a string        
+        # * `$body` should contain the request body as a string    
         $body = ''
-
-        # Use the local path if present
-        $localPath =
-            if ($request.Url.LocalPath) {
-                $request.Url.LocalPath
-            } else { $null }
         
         # We want to match the url to a function.
-        $functions = @($this.Functions)
+        $url = $request.Url
+        $url
+        $webSocket = $null
+        # This is only _slightly_ different for websocket requests.
+        # If the request is a websocket request, and we've got a live socket
+        if ($request.IsWebSocketRequest -and $context.WebSocket) {            
+            $webSocket = $context.WebSocket            
+            # and make $url reflect the new value
+            $url = $request.Url
             
-        # We can have one of three possible names
-        $exactNames = @(
-            # Fully qualified (i.e `function http://127.0.0.1/ {}` )
-            $request.Url.Scheme,'://',
-                $request.Url.DnsSafeHost,
-                    $request.Url.LocalPath -join ''
-            # Host qualified (i.e `function example.com/ {}` )
-            $request.Url.DnsSafeHost, 
-                $request.Url.LocalPath -join ''
-            # Locally qualified (i.e. `function / {} ) 
-            $request.Url.LocalPath
-        )                    
+            $JsonDepth = $this.JsonDepth
+        }
 
-        $exactMatches = # Simply -match the function to the exact names
-            @($functions -match "^(?>$(
-                @(foreach ($exactName in $exactNames) {
-                    [Regex]::Escape($exactName)
-                }) -join '|'
-            ))/?$")        
-            
+        # Now that URL is properly defined (websocket or not)
+        # we can just `.Route` our functions.
         $functions = @(
-            if ($exactMatches) {
-                $exactMatches[0]
-            } else {
-                foreach ($function in $functions) {
-                    # We don't want to be too picky about ending slashes,
-                    # so remove them from our function name.
-                    $functionNameNoSlash = $function.Name -replace '/$'
-                    if (
-                        # If the local path is like our function name
-                        $localPath -and (
-                            # we've found our function
-                            $localPath -replace '/$' -like $functionNameNoSlash
-                        )
-                    ) {
-                        # Break after the first function we find.
-                        $function
-                        break
-                    }
-                }
-            }
+            # (We just need to use use a new closure to avoid potential locks)
+            . $this.Router.GetNewClosure() $url $this.Functions
         )
-
-        # Get the last matching function 
-        $function = $functions[-1]
                 
-        # If there were no found functions
-        if (-not $functions) {
+        # If there were no found functions and this isn't a websocket request
+        if (-not $functions -and -not $request.IsWebSocketRequest) {
             # We're going to send a 404.
             if ($response.StatusCode) { $response.StatusCode = 404 }
             # We want that 404 to be customizable,
@@ -366,6 +667,12 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             }
         }
 
+        # After we've routed, get the last matching function. 
+        $function = $functions[-1]
+
+        # If we have not mapped a function, return.
+        if (-not $function) { return }
+
         # To add to the fun, we want our functions to take parameters
         $query = [Ordered]@{}
         # If the request had a query, parse it.
@@ -375,16 +682,13 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             foreach ($queryParameter in $parsedQueryString.Keys) {
                 $query[$queryParameter] = $parsedQueryString[$queryParameter]
                 if ($query[$queryParameter] -match '^(true|false)$') {
-                    $query[$queryParameter] = $query[$queryParameter] -match '^true' 
+                    $query[$queryParameter] = $query[$queryParameter] -match '^true'
                 }
             }
         }
         
-        # If the method is POST
-        if ($Method -eq 'POST' -and
-            # and we can read input
-            $request.InputStream.CanRead
-        ) {
+        # If the method is POST and we can read input
+        if ($Method -eq 'POST' -and $request.InputStream.CanRead) {
             # and we are dealing with `x-www-form-urlencoded` form data
             if (
                 $request.ContentType -eq 'application/x-www-form-urlencoded'
@@ -407,12 +711,9 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                 $reader.Close(),$reader.Dispose()
 
                 try {
-                    $parsedBody = ConvertFrom-Json -InputObject $body -AsHashtable
-                    foreach ($key in $parsedBody.Keys) {
-                        $query[$key] = $parsedBody[$key]
-                        if ($query[$key] -match '^(true|false)$') {
-                            $query[$key] = $query[$key] -match '^true'
-                        }
+                    $parsedBody = ConvertFrom-Json -InputObject $body
+                    foreach ($property in $parsedBody.psobject.properties) {
+                        $query[$property] = $parsedBody.($property.Name)
                     }
                 } catch {
                     $ex = $_
@@ -423,13 +724,13 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
                     return
                 }
             }
-        }    
+        }
 
         # And use its command metadata to find all possible parameters
         $functionParameterMap = @{}
-        foreach ($parameter in (
+        foreach ($parameter in @((
             $function -as [Management.Automation.CommandMetadata]
-        ).Parameters.Values) {
+        ).Parameters.Values)) {
             $functionParameterMap[$parameter.Name] = $parameter
             foreach ($alias in $parameter.Aliases) {
                 $functionParameterMap[$alias] = $parameter
@@ -448,8 +749,18 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             }
         }
 
+        # If we passed a data object, walk over its properties
+        foreach ($property in $data.psobject.properties) {
+            # and map them to the function where we can.
+            $functionParameter = $functionParameterMap[$property.Name]
+            if ($functionParameter) {
+                $functionParameters[$functionParameter.Name] =
+                    $data.$($property.Name)
+            }
+        }
+
         # If the function had an output type like `*/*`
-        if ($function.OutputType.Name -like '*/*' -and 
+        if ($function.OutputType.Name -like '*/*' -and
             $response.OutputStream) {
             foreach ($outputType in $function.OutputType) {
                 if ($outputType.Name -like '*/*') {
@@ -466,87 +777,32 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             $response.ContentType = 'text/html'
         }
 
-        $encoding =
-            if ($request.ContentEncoding) {$request.ContentEncoding }
-            else { [Text.Encoding]::UTF8 }
+        $encoding = [Text.Encoding]::UTF8
         
+        # We need to determine how we will handle function output.
+        $FunctionOutput =
         # We do not always want to stream content
-        if ($(
-            # we should only stream responses if `$this`
-            # or the `$function` say so.
-            :shouldStream foreach ($target in $this, $function) {
-                # We can request streaming with `Stream`, `Streaming`, or `Chunked`.
-                foreach ($name in 'Stream', 'Streaming', 'Chunked') {
-                    if ($target.$Name) { $true; break shouldStream}
+            if ($(
+                # we should only stream if `$this` or the `$function` say so.
+                $this.Stream
+            )) {
+                if ($request.IsWebSocketRequest) {
+                    # If we are streaming a websocket request
+                    $this.WebSocketStreamOutput
+                } else {
+                    $this.HttpStreamOutput
+                }
+            } else {
+                # If we are not streaming, output is easier
+                if ($request.IsWebSocketRequest) {
+                    $this.WebSocketOutput
+                } else {
+                    $this.HttpOutput
                 }
             }
-        )) {            
-            $functionOutput = {
-                begin {
-                    # To stream output, we need to set the protocol version
-                    $response.ProtocolVersion = '1.1'
-                    # and send chunked responses.
-                    $response.SendChunked = $true
-                    # Get a pointer to the output stream for repeated use.
-                    $outputStream = $response.OutputStream                    
-                }
-
-                process {
-                    # Then we need to take each output object
-                    $in = $_                
-
-                    # If it is XML,
-                    if ($in.OuterXml -and $outputStream.CanWrite) {
-                        # write it out.
-                        $buffer = $encoding.GetBytes("$($in.OuterXml)")
-                        $outputStream.Write($buffer, 0, $buffer.Length)
-                        $outputStream.Flush()
-                    }
-                    # If it has an HTML property
-                    elseif ($in.html -and $outputStream.CanWrite) {
-                        # write that out
-                        $buffer = $encoding.GetBytes("$($in.html)")
-                        $outputStream.Write($buffer, 0, $buffer.Length)
-                        $outputStream.Flush()
-                    }
-                    # Otherwise
-                    elseif ($outputStream.CanWrite) {
-                        # Stringify the result.
-                        $buffer = $encoding.GetBytes("$in")
-                        $outputStream.Write($buffer, 0, $buffer.Length)
-                        $outputStream.Flush()
-                    } else {
-                        $in
-                    }
-                }
-
-                end {                
-                    # Close our response when the command is done
-                    if ($response.Close) {
-                        $response.Close()
-                    }
-                }
-            }
-        } else {
-            # If we are not going to stream our output is more simple
-            $FunctionOutput = {                
-                # Close the response
-                $response.Close(
-                    # with a buffer holding all the output
-                    $encoding.GetBytes((@(
-                        foreach ($in in $input) {
-                            $inXml = $in.OuterXml
-                            if ($inXml) {"$inXml"}
-                            elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
-                            else {"$in"}
-                        }
-                    ) -join '')),
-                    
-                    $false
-                )
-            }
-        }
-
+        
+        $functionOutput = $functionOutput.GetNewClosure()
+        
         # Call our function and stream the results
         try {
             . $function @functionParameters *>&1 | 
@@ -561,6 +817,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         }
     } -Force -PassThru |
     #endregion `.Run`
+
     #region `.Start`
     Add-Member ScriptMethod Start {
         param()
@@ -569,7 +826,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
             # Attach this listener to this object
             $this | Add-Member NoteProperty HttpListener (
                 [Net.HttpListener]::new()
-            ) -Force
+            ) -Force            
             # If we have any prefixes, add them
             if ($this.Prefixes) {
                 foreach ($prefix in $this.Prefixes) {
@@ -593,7 +850,7 @@ $outputObject = New-Object PSObject -Property ([Ordered]@{
         
         # Now start our fun little server loop in a thread job.
         $newJob = [Ordered]@{
-            ScriptBlock = $this.JobScript
+            ScriptBlock = $this.ServerScript
             ArgumentList = $this
             Name = "$($this.HttpListener.Prefixes -replace '/$')"
             ThrottleLimit = 16kb
@@ -625,7 +882,7 @@ if ($prefixArguments) {
 if ($ArgumentList -contains 'Start' -or 
     # or the invocation name started with `Start-`
     $MyInvocation.InvocationName -match '^Start-') {
-    # start the fun now.
+    # start the fun now.  
     $outputObject.Start()
 } else {
     # otherwise, output the fun
