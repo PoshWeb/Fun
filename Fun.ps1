@@ -630,8 +630,7 @@ $outputObject = New-Object PSObject -Property $output |
         $body = ''
         
         # We want to match the url to a function.
-        $url = $request.Url
-        $url
+        $url = $request.Url        
         $webSocket = $null
         # This is only _slightly_ different for websocket requests.
         # If the request is a websocket request, and we've got a live socket
@@ -826,7 +825,7 @@ $outputObject = New-Object PSObject -Property $output |
             # Attach this listener to this object
             $this | Add-Member NoteProperty HttpListener (
                 [Net.HttpListener]::new()
-            ) -Force            
+            ) -Force
             # If we have any prefixes, add them
             if ($this.Prefixes) {
                 foreach ($prefix in $this.Prefixes) {
