@@ -341,7 +341,7 @@ $SocketJob = {
             }
             
             # Now let's convert it from json
-            $socketMessage = 
+            $socketMessage =
                 if ($messageString) {
                     try {
                         ConvertFrom-Json -InputObject $messageString
@@ -356,7 +356,7 @@ $SocketJob = {
                 $this.Run($socketInfo, $socketMessage)
             } else {
                 $this.Run($socketInfo)
-            }                
+            }
         } catch {
             Write-Error $_
         }
@@ -630,15 +630,27 @@ $outputObject = New-Object PSObject -Property $output |
         $body = ''
         
         # We want to match the url to a function.
-        $url = $request.Url        
+        $url = $request.Url
+
+        $headers = [Ordered]@{}
+        if ($request.Headers) {
+            foreach ($key in $request.Headers.Keys) {
+                $headers[$key] = $request.Headers[$key]
+            }
+        }
+
+        $cookies = [Ordered]@{}
+        foreach ($cookie in $request.Cookies) {
+            $Cookies[$cookie.Name] = $cookie
+        }
+
         $webSocket = $null
         # This is only _slightly_ different for websocket requests.
         # If the request is a websocket request, and we've got a live socket
-        if ($request.IsWebSocketRequest -and $context.WebSocket) {            
-            $webSocket = $context.WebSocket            
+        if ($request.IsWebSocketRequest -and $context.WebSocket) {
+            $webSocket = $context.WebSocket
             # and make $url reflect the new value
             $url = $request.Url
-            
             $JsonDepth = $this.JsonDepth
         }
 
@@ -648,7 +660,7 @@ $outputObject = New-Object PSObject -Property $output |
             # (We just need to use use a new closure to avoid potential locks)
             . $this.Router.GetNewClosure() $url $this.Functions
         )
-                
+
         # If there were no found functions and this isn't a websocket request
         if (-not $functions -and -not $request.IsWebSocketRequest) {
             # We're going to send a 404.
@@ -722,7 +734,7 @@ $outputObject = New-Object PSObject -Property $output |
                     ), $false)
                     return
                 }
-            }
+            }            
         }
 
         # And use its command metadata to find all possible parameters
@@ -872,20 +884,18 @@ $outputObject = New-Object PSObject -Property $output |
 $prefixArguments = $ArgumentList -match '^https?://'
 
 if ($prefixArguments) {
-    $OutputObject | 
+    $OutputObject |
         Add-Member NoteProperty Prefixes (
             $prefixArguments -replace '/?$', '/'
         ) -Force
 }
 # If the arguments contained `start`
-if ($ArgumentList -contains 'Start' -or 
+if ($ArgumentList -contains 'Start' -or
     # or the invocation name started with `Start-`
     $MyInvocation.InvocationName -match '^Start-') {
-    # start the fun now.  
+    # start the fun now.
     $outputObject.Start()
 } else {
     # otherwise, output the fun
     $outputObject
 }
-
-return
