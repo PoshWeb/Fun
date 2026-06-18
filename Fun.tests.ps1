@@ -1,8 +1,10 @@
 describe Fun {
     it 'Is Fun To Make a Server' {
         function / { "Hello from Fun" }
-        $job = Start-Fun
         
+        $fun = . ./Fun.ps1
+        $job = $fun.Start()
+
         Invoke-RestMethod $job.Name | 
             Should -Be "Hello from Fun"
         
