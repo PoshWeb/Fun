@@ -712,7 +712,7 @@ $outputObject = New-Object PSObject -Property $output |
                 try {
                     $parsedBody = ConvertFrom-Json -InputObject $body
                     foreach ($property in $parsedBody.psobject.properties) {
-                        $query[$property] = $parsedBody.($property.Name)
+                        $query[$property.Name] = $parsedBody.($property.Name)
                     }
                 } catch {
                     $ex = $_
@@ -826,7 +826,7 @@ $outputObject = New-Object PSObject -Property $output |
             $this | Add-Member NoteProperty HttpListener (
                 [Net.HttpListener]::new()
             ) -Force
-            # If we have any prefixes, add them
+            # If we have any prefixes, add them.
             if ($this.Prefixes) {
                 foreach ($prefix in $this.Prefixes) {
                     $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
