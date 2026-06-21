@@ -202,18 +202,22 @@ $Router = {
 # A script block used to output http requests.
 [ScriptBlock]
 $HttpOutput = {
-    # CGI requests just need to close
-    $response.Close(
+    $allOutput = @($input)
+    $allOutputBytes = $allOutput -as [byte[]]
+    if (-not $allOutputBytes) {
         # with a buffer holding all the output
-        $encoding.GetBytes((@(
-            foreach ($in in @($input)) {
+        $allOutputBytes = $encoding.GetBytes((@(
+            foreach ($in in $allOutput) {
                 $inXml = $in.OuterXml
                 if ($inXml) {"$inXml"}
                 elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
                 else {"$in"}
             }
-        ) -join '')),
-        $false
+        ) -join ''))
+    }
+    # CGI requests just need to close
+    $response.Close(
+        $allOutputBytes,$false
     )
 },
 
@@ -233,16 +237,22 @@ $HttpStreamOutput = {
         # Then we output each object
         $in = $_                        
         if ($outputStream.CanWrite) {
-            $buffer = $encoding.GetBytes(
-                $(
-                    $inXml = $in.OuterXml
-                    if ($inXml) {"$inXml"}
-                    elseif (
-                        $($inHtml = $in.html;$inHtml)
-                    ) {"$inHtml"}
-                    else {"$in"}
+            $outBytes = $in -as [byte[]]
+            $buffer = if ($outBytes) {
+                $outBytes
+            } else {
+                $encoding.GetBytes(
+                    $(
+                        $inXml = $in.OuterXml
+                        if ($inXml) {"$inXml"}
+                        elseif (
+                            $($inHtml = $in.html;$inHtml)
+                        ) {"$inHtml"}
+                        else {"$in"}
+                    )
                 )
-            )
+            }
+            
             $outputStream.Write($buffer, 0, $buffer.Length)
             $outputStream.Flush()
         } else {
