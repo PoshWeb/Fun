@@ -6,7 +6,7 @@
 .NOTES
     Icons will be cached in memory to avoid repeated CDN requests.
 .EXAMPLE
-    /_includes/Feather clipboard
+    /_includes/FeatherIcon clipboard
 .LINK
     https://feathericons.com/
 #>

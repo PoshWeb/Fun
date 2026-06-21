@@ -85,7 +85,7 @@ $(
 )
 </select>
 <button class='random-palette-button' command='--random-palette' id='random-palette-button' commandfor='$SelectPaletteId'>$(
-    /_includes/Feather -Icon refresh-cw
+    /_includes/FeatherIcon -Icon refresh-cw
 )</button>
 
 </section>

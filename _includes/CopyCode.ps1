@@ -14,7 +14,7 @@ document.querySelectorAll('pre > code').forEach(element => {
     copyCodeButton.classList.add('copy-button')
     copyCodeButton.onclick = () => navigator.clipboard.writeText(element.innerText)
     copyCodeButton.innerHTML = ``$(
-        /_includes/feather -Icon 'clipboard'
+        /_includes/FeatherIcon -Icon 'clipboard'
     )``
     element.parentNode.prepend(copyCodeButton)
 });
