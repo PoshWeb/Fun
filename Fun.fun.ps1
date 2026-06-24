@@ -1,3 +1,4 @@
+#requires -Module Fun
 
 # Fun Website
 if (-not $ExecutionContext.SessionState.InvokeCommand.GetCommand('layout', 'Alias')) {
