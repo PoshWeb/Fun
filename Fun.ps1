@@ -93,10 +93,10 @@
 
     Start-Fun
 
-    Pop-Location    
+    Pop-Location
 #>
 [CmdletBinding(PositionalBinding=$false)]
-[Alias('Start-Fun')]
+[Alias('Start-Fun','Deploy-Fun')]
 param(
 # A list of any arguments.
 # If an argument starts with `https?://`, 
@@ -198,6 +198,13 @@ $Router = {
     )
 },
 
+# Initialization scripts
+# Providing initialization scripts will isolate the server.
+# This should not expose any functions not defined in the initialization scripts.
+# Any required modules should be imported.
+[Alias('Init','IsolateScript')]
+[Management.Automation.ExternalScriptInfo[]]
+$InitializeScript,
 
 # A script block used to output http requests.
 [ScriptBlock]
@@ -270,13 +277,22 @@ $HttpStreamOutput = {
 # This should listen for requests and `.Run` with that context.
 [ScriptBlock]
 $ServerScript = {
-    param($this)
+    param($server, [Collections.IDictionary]$IO = [Ordered]@{})
     # It will have a listener
-    $httpListener = $this.HttpListener
+    $httpListener = $server.HttpListener
+    
+    foreach ($key in @($IO.Keys)) {
+        $ExecutionContext.SessionState.PSVariable.set($key, $IO[$key])
+    }
+
+    if ($server.Initialize) {
+        $server.Functions = 
+            $ExecutionContext.SessionState.InvokeCommand.GetCommands('*/*','Function,Alias', $true)
+    }
     
     # and we can loop while it is listening
-    if (-not $this.Counter) {            
-        $this | Add-Member NoteProperty Counter ([long]0) -Force
+    if (-not $server.Counter) {            
+        $server | Add-Member NoteProperty Counter ([long]0) -Force
     }
     
     while ($httpListener.IsListening) {
@@ -290,10 +306,10 @@ $ServerScript = {
         $request, $response = $context.Request, $context.Response
         
         # Increment our counter
-        $this.Counter++
+        $server.Counter++
 
         try {
-            $this.Run($context)
+            $server.Run($context)
         } catch {
             $err = $_
             $response.StatusCode = 400
@@ -315,6 +331,10 @@ $SocketJob = {
     $webSocket = $socketInfo.WebSocket
     $context = $socketInfo.Context
     $request, $response = $context.Request, $context.Response
+    # If we had an initialization script, we want to refresh out command list to the local copy
+    if ($this.InitializationScript) {
+        $this.Functions = $ExecutionContext.SessionState.InvokeCommand.GetCommands('*/*','Function,Alias')
+    }
     $url = $Request.Url
     
     # This loop will run as long as the websocket is open.
@@ -444,13 +464,15 @@ $outputObject = New-Object PSObject -Property $output |
         .DESCRIPTION
             Builds the server into a static site.
         
-            Will build any `/` function whose name is like *.*.
+            Will build any `/` function whose name is like *.*
+            
+            Existing files will be overwritten.
         #>
         param([string]$Path = $pwd)
         $this.Functions |
             . { process {
                 $cmd = $_
-                if ($cmd.Name -notlike '*.*') { return }                
+                if ($cmd.Name -notlike '*.*') { return }
                 if ($cmd.Name -match '\*') { return }
                 $output = . $cmd
                 $path =  Join-Path "." "./$($cmd.Name -replace "^/")"
@@ -602,11 +624,17 @@ $outputObject = New-Object PSObject -Property $output |
                 Add-Member NoteProperty Url (                    
                     ($request.Url -replace '^http', 'ws') -as [uri]
                 ) -Force
-            
+            $socketJobParams = [Ordered]@{
+                Name = "$($request.Url)"
+                ArgumentList = $this,$socketInfo
+                ThrottleLimit = 32kb
+                ScriptBlock = $this.SocketJob
+            }
+            if ($this.InitializationScript) {
+                $socketJobParams.InitializationScript = $socketJobParams
+            }
             # Each websocket runs in its own thread job
-            $socketJob = Start-ThreadJob -Name "$(
-                $request.Url
-            )" -ScriptBlock $this.SocketJob -ArgumentList $this, $socketInfo -ThrottleLimit 32kb  |
+            $socketJob = Start-ThreadJob @socketJobParams |
                 Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
                 Add-Member NoteProperty SocketInfo $socketInfo -Force -PassThru |
                 Add-Member NoteProperty WebSocket $socketInfo.WebSocket -Force -PassThru |
@@ -875,6 +903,20 @@ $outputObject = New-Object PSObject -Property $output |
             ArgumentList = $this
             Name = "$($this.HttpListener.Prefixes -replace '/$')"
             ThrottleLimit = 16kb
+        }
+        if ($this.InitializeScript) {
+            $initializationScript = [ScriptBlock]::Create(
+                @(
+                    foreach ($initScript in $this.Initialize) {
+                        foreach ($required in $initScript.ScriptBlock.Ast.ScriptRequirements.RequiredModules) {
+                            "Import-Module $($required.Name) -Global"
+                        }
+                        ". '$($initScript.Source -replace "'","''")'"
+                    }
+                ) -join [Environment]::NewLine
+            )
+            $this | Add-Member NoteProperty Initialize $InitializationScript -Force
+            $newJob.InitializationScript = $initializationScript
         }
 
         $newJob = Start-ThreadJob @newJob |
