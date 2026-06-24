@@ -65,6 +65,11 @@ param(
     [string]
     $Font = 'Roboto',
 
+    # The header font name
+    # This will be used for `<h1>`,`<h2>`, `<h3>` elements.
+    [string]
+    $HeaderFont = 'Nunito Sans',
+
     # The Google Code Font name
     # This will be used for `<pre>` elements.
     [string]
@@ -142,6 +147,10 @@ filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
         if ($Font) {
             "<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=$Font' id='font' />"
         }
+        if ($HeaderFont) {
+            "<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=$headerFont' id='headerFont' />"
+        }
+
         # * Code font
         if ($CodeFont) {
             "<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=$CodeFont' id='codeFont' />"
@@ -162,7 +171,7 @@ filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
                     # with autosized top and bottom and a flexibly sized middle
                     "grid-template-rows: auto, 1fr, auto"
                     # and used the font we provided (falling back to sans-serif).
-                    "font-family: '$Font', sans-serif;"
+                    "font-family: '$Font', sans-serif"
                 ) -join ';'
             "}"
 
@@ -170,6 +179,7 @@ filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
             ".main { width: 80%; margin-left:auto; margin-right: auto }"
 
             # `h1`, `h2`, `h3` are centered with slight font size and line height adjustments
+            "h1, h2, h3 { font-family: '$HeaderFont', sans-serif; letter-spacing: 0.1rem; }"
             "h1 { text-align: center; font-size: 4rem; line-height: 5rem;}"
             "h2 { text-align: center; font-size: 2rem; line-height: 3rem; }"
             "h3 { text-align: center; font-size: 1.5rem; line-height: 2rem; }"
@@ -203,6 +213,7 @@ filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
 
             # `select` and `button` should hover
             "select:hover, button:hover { cursor: pointer }"
+            "* { box-sizing: border-box }"
 
             # The `header` should be a fixed grid
             "header {"
@@ -215,28 +226,37 @@ filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
                     )
                 )",
                 "grid-template-rows: auto, auto",
-                "grid-template-columns: auto 1fr auto",
+                "grid-template-columns: auto 1fr auto",                
+                "padding: 0.5rem",
                 "top:0",
                 "width: 100%" -join ';'
             "}"
+
+            "p {line-height: 1.5rem }"
             
+            "@keyframes grow-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }"
             # Arrange the various headers
             ".header-left{ grid-area: header-left; text-align: left; }"
             ".header-middle { grid-area: header-middle; flex:1; text-align: center; }"
             ".header-right { grid-area: header-right; text-align: right; margin-left: auto; }"
-            ".header-progress { grid-area: header-progress; }"
+            ".header-progress {"
+                "grid-area: header-middle",
+                "width: 100%",
+                "height: 50%",
+                "margin-top: auto",
+                "margin-bottom: auto",
+                "transform-origin: 0 50%",
+                "background: linear-gradient(to right, transparent, var(--foreground))",
+                "animation: grow-progress auto linear",
+                "animation-timeline: scroll()" -join ';'
+            "}"
 
             # Render code and pre elements in our code font, fall back to monospace.
             "pre, code { font-family: '$CodeFont', monospace; }"
+            "code { padding: 0.5rem }"
 
             # Include our highlight colors.
             /_includes/HighlightColors
-            
-            "@keyframes grow-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }"
-            ".header-progress {grid-area: header-middle; width: 100%; height: .5em; background: var(--foreground); transform-origin: 0 50%;
-                animation: grow-progress auto linear;
-                animation-timeline: scroll();}"            
-            
         "</style>"
     "</head>"
 
