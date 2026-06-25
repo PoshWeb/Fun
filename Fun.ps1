@@ -515,6 +515,33 @@ $outputObject = New-Object PSObject -Property $output |
         }
     } -Force -PassThru |
     #endregion `.Clear`
+    #region `.Define`
+    Add-Member ScriptProperty Define {
+        <#
+        .SYNOPSIS
+            Define the Current endpoints.
+        .DESCRIPTION
+            Returns a script that will define of all current endpoints.
+        #>        
+        [ScriptBlock]::Create(
+            @(
+                foreach ($func in $this.Functions) {
+                    if ($func -is [Management.Automation.FunctionInfo]) {
+                        "function $func {$(
+                            $func.ScriptBlock
+                        )$([Environment]::NewLine)}"
+                    } elseif ($func -is [Management.Automation.AliasInfo]) {
+                        "Set-Alias '$(
+                            $func.Name -replace "'","''"
+                        )' '$(
+                            $func.ResolvedCommand -replace "'","''"
+                        )'"
+                    }
+                }
+            ) -join [Environment]::NewLine
+        )
+    } -Force -PassThru |
+    #endregion `.Define`
     #region `.Deploy`
     Add-Member ScriptMethod Deploy {
         <#
@@ -548,35 +575,7 @@ $outputObject = New-Object PSObject -Property $output |
             $this.HttpListener.Prefixes
         }
     } -Force -PassThru |
-    #endregion `.Prefix
-   
-    #region `.Define`
-    Add-Member ScriptProperty Define {
-        <#
-        .SYNOPSIS
-            Define the Current endpoints.
-        .DESCRIPTION
-            Returns a script that will define of all current endpoints.
-        #>        
-        [ScriptBlock]::Create(
-            @(
-                foreach ($func in $this.Functions) {
-                    if ($func -is [Management.Automation.FunctionInfo]) {
-                        "function $func {$(
-                            $func.ScriptBlock
-                        )$([Environment]::NewLine)}"
-                    } elseif ($func -is [Management.Automation.AliasInfo]) {
-                        "Set-Alias '$(
-                            $func.Name -replace "'","''"
-                        )' '$(
-                            $func.ResolvedCommand -replace "'","''"
-                        )'"
-                    }
-                }
-            ) -join [Environment]::NewLine
-        )
-    } -Force -PassThru |
-    #endregion `.Define`
+    #endregion `.Prefix    
         
     #region `.Remove`
     Add-Member ScriptMethod Remove {
@@ -993,13 +992,16 @@ if ($prefixArguments) {
             $prefixArguments -replace '/?$', '/'
         ) -Force
 }
-# If the arguments contained `start`
-if ($ArgumentList -contains 'Start' -or
-    # or the invocation name started with `Start-`
-    $MyInvocation.InvocationName -match '^Start-') {
-    # start the fun now.
-    $outputObject.Start()
-} else {
-    # otherwise, output the fun
-    $outputObject
+
+foreach ($verb in 'Build', 'Deploy', 'Start') {
+    if (
+        $ArgumentList -contains $verb -or
+        $MyInvocation.InvocationName -match "^$verb-"
+    ) {
+        return $outputObject.$Verb.Invoke()
+    }
 }
+
+# otherwise, output the fun
+return $outputObject
+
