@@ -75,7 +75,7 @@ FunctionsToExport = 'Get-Fun', 'Fun'
 VariablesToExport = 'fun'
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
-AliasesToExport = 'Start-Fun'
+AliasesToExport = 'Start-Fun', 'Build-Fun', 'Deploy-Fun'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

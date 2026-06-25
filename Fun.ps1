@@ -96,7 +96,7 @@
     Pop-Location
 #>
 [CmdletBinding(PositionalBinding=$false)]
-[Alias('Start-Fun','Deploy-Fun')]
+[Alias('Start-Fun','Deploy-Fun','Build-Fun')]
 param(
 # A list of any arguments.
 # If an argument starts with `https?://`, 
@@ -331,10 +331,15 @@ $SocketJob = {
     $webSocket = $socketInfo.WebSocket
     $context = $socketInfo.Context
     $request, $response = $context.Request, $context.Response
-    # If we had an initialization script, we want to refresh out command list to the local copy
+    # If we had an initialization script,
+    # Locally scope our functions.
     if ($this.InitializationScript) {
-        $this.Functions = $ExecutionContext.SessionState.InvokeCommand.GetCommands('*/*','Function,Alias')
+        $this.Functions =
+            $ExecutionContext.SessionState.InvokeCommand.GetCommands(
+                '*/*','Function,Alias', $true
+            )
     }
+
     $url = $Request.Url
     
     # This loop will run as long as the websocket is open.
@@ -353,7 +358,9 @@ $SocketJob = {
         
         # If we had a problem, write an error.
         if ($receivingWebSocket.Exception) {
-            Write-Error -Exception $receivingWebSocket.Exception -Category ProtocolError
+            Write-Error -Exception (
+                $receivingWebSocket.Exception
+            ) -Category ProtocolError
             continue
         }
         
@@ -437,7 +444,9 @@ $myTypeName =
     $MyInvocation.MyCommand.Name -replace
         '\.ps1$' -replace '^.+?-' # (replacing the extension and any verb)
 
-Update-TypeData -TypeName $myTypeName -Force -DefaultDisplayPropertySet 'CreatedAt','Prefix','Functions'
+Update-TypeData -TypeName $myTypeName -Force -DefaultDisplayPropertySet (
+    'CreatedAt','Prefix','Functions'
+)
 
 # Create a dictionary for our output object
 $output = [Ordered]@{PSTypeName = $myTypeName}
@@ -466,21 +475,23 @@ $outputObject = New-Object PSObject -Property $output |
         
             Will build any `/` function whose name is like *.*
             
-            Existing files will be overwritten.
+            Output a list of paths and the contents of the files. 
         #>
-        param([string]$Path = $pwd)
+        param()
         $this.Functions |
             . { process {
                 $cmd = $_
                 if ($cmd.Name -notlike '*.*') { return }
                 if ($cmd.Name -match '\*') { return }
-                $output = . $cmd
-                $path =  Join-Path "." "./$($cmd.Name -replace "^/")"
-                $newFile = [Ordered]@{
-                    Path = $path
-                    Value=$output -join [Environment]::NewLine
+                $output = . $cmd                
+                [Ordered]@{
+                    Path = "./$($cmd.Name -replace "^/")"
+                    Value= if ($output -as [byte[]]) {
+                        $output -as [byte[]]
+                    } else {
+                        $output -join [Environment]::NewLine
+                    }
                 }
-                New-Item @newFile -Force -ItemType File
             } }
     } -Force -PassThru |
     #endregion `.Build`
@@ -488,14 +499,47 @@ $outputObject = New-Object PSObject -Property $output |
     #region `.Clear`
     Add-Member ScriptMethod Clear {
         foreach ($func in $this.Functions) {
-            if ($func -is [Management.Automation.FunctionInfo]) {
-                Remove-Item "function:/$($func.Name)"
-            } elseif ($func -is [Management.Automation.AliasInfo]) {
-                Remove-Item "alias:/$($func.Name)"
+            try {
+                if ($func -is [Management.Automation.FunctionInfo]) {
+                    Remove-Item "function:/$(
+                        $func.Name -replace  '\*','`*' -replace '\?', '`?'
+                    )"
+                } elseif ($func -is [Management.Automation.AliasInfo]) {
+                    Remove-Item "alias:/$(
+                        $func.Name -replace  '\*','`*' -replace '\?', '`?'
+                    )"
+                }
+            } catch {
+                Write-Warning "Could not remove $($func.Name) - $_"
             }
         }
     } -Force -PassThru |
     #endregion `.Clear`
+    #region `.Deploy`
+    Add-Member ScriptMethod Deploy {
+        <#
+        .SYNOPSIS
+            Deploys the server 
+        .DESCRIPTION
+            Deploys the server as a static site.
+        
+            Will deploy any `/` function whose name is like *.*
+            
+            Existing files will be overwritten.
+        #>
+        param([string]$Path = $pwd)
+        foreach ($fileBuilt in $this.Build()) {
+            $fileBuilt.Path = Join-Path $path $fileBuilt.Path
+            if ($fileBuilt.Value -is [byte[]]) {
+                $newFile = New-Item -Path $fileBuilt -Force
+                [IO.File]::WriteAllBytes($newFile.FullName, $fileBuilt.Value)
+                Get-Item -LiteralPath $fileBuilt
+            } else {                
+                New-Item @fileBuilt -Force
+            }
+        }        
+    } -Force -PassThru |
+    #endregion `.Deploy`
     #region `.Prefix`
     Add-Member ScriptProperty Prefix {
         if ($this.HttpListener.Prefixes.Length -eq 1) {
@@ -540,10 +584,18 @@ $outputObject = New-Object PSObject -Property $output |
         if (-not $Wildcard) { return }
         foreach ($func in $this.Functions) {
             if ($func.Name -notlike $Wildcard) { continue }
-            if ($func -is [Management.Automation.FunctionInfo]) {
-                Remove-Item "function:/$($func.Name)"
-            } elseif ($func -is [Management.Automation.AliasInfo]) {
-                Remove-Item "alias:/$($func.Name)"
+            try {
+                if ($func -is [Management.Automation.FunctionInfo]) {
+                    Remove-Item "function:/$(
+                        $func.Name -replace  '\*','`*' -replace '\?', '`?'
+                    )"
+                } elseif ($func -is [Management.Automation.AliasInfo]) {
+                    Remove-Item "alias:/$(
+                        $func.Name -replace  '\*','`*' -replace '\?', '`?'
+                    )"
+                }
+            } catch {
+                Write-Warning "Could not remove $($func.Name) - $_"
             }
         }
     } -Force -PassThru |
@@ -711,7 +763,7 @@ $outputObject = New-Object PSObject -Property $output |
                 $functions = $statusCodeFunction
             } else {
                 # Otherwise, close the response
-                $response.Close()
+                $response.Close([Text.Encoding]::UTF8.GetBytes("No Fun @ $($request.Url)"), $false)
                 return
             }
         }
