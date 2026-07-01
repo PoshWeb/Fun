@@ -71,9 +71,11 @@
     Fun also allows you to redefine how it serves content and outputs results.
 
     You should not need to do this in most scenarios, but it can be fun to mod an engine.
+
+    Fun can run isolated when provided an -InitializeScript file.
 .EXAMPLE
     # Hello World server
-    / { "<h1>hello world</h1>" }
+    function / { "<h1>hello world</h1>" }
 
     Start-Fun
 .EXAMPLE
@@ -110,7 +112,6 @@ param(
 $ArgumentList,
 
 # Any Input Object.
-
 # This is currently passed on directly to a server instance.
 # Any function can reference this input with `$this.Input`
 [Parameter(ValueFromPipeline)]
@@ -218,7 +219,7 @@ $HttpOutput = {
                 $inXml = $in.OuterXml
                 if ($inXml) {"$inXml"}
                 elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
-                else {"$in"}
+                elseif ($in.ToString.Invoke) {$in.ToString()}
             }
         ) -join ''))
     }
@@ -255,7 +256,9 @@ $HttpStreamOutput = {
                         elseif (
                             $($inHtml = $in.html;$inHtml)
                         ) {"$inHtml"}
-                        else {"$in"}
+                        elseif ($in.ToString.Invoke) {
+                            $in.ToString()
+                        }                        
                     )
                 )
             }
@@ -295,7 +298,7 @@ $ServerScript = {
         $server | Add-Member NoteProperty Counter ([long]0) -Force
     }
     
-    while ($httpListener.IsListening) {
+    :nextRequest while ($httpListener.IsListening) {
         # Get the next context
         $getContext = $httpListener.GetContextAsync()
         # and wait until it's ready
@@ -481,9 +484,16 @@ $outputObject = New-Object PSObject -Property $output |
         $this.Functions |
             . { process {
                 $cmd = $_
+
                 if ($cmd.Name -notlike '*.*') { return }
                 if ($cmd.Name -match '\*') { return }
-                $output = . $cmd                
+
+                try {$output = . $cmd} 
+                catch {
+                    Write-Warning "Error building $($cmd.Name): $_ "
+                    return
+                }
+
                 [Ordered]@{
                     Path = "./$($cmd.Name -replace "^/")"
                     Value= if ($output -as [byte[]]) {
@@ -575,7 +585,7 @@ $outputObject = New-Object PSObject -Property $output |
             $this.HttpListener.Prefixes
         }
     } -Force -PassThru |
-    #endregion `.Prefix    
+    #endregion `.Prefix`
         
     #region `.Remove`
     Add-Member ScriptMethod Remove {
@@ -689,6 +699,7 @@ $outputObject = New-Object PSObject -Property $output |
                 Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
                 Add-Member NoteProperty SocketInfo $socketInfo -Force -PassThru |
                 Add-Member NoteProperty WebSocket $socketInfo.WebSocket -Force -PassThru |
+                Add-Member NoteProperty Url $socketInfo.Request.Url -Force -PassThru |
                 Add-Member NoteProperty Fun $this -Force -PassThru
             
             $urlString = "$($request.Url)"
@@ -715,7 +726,7 @@ $outputObject = New-Object PSObject -Property $output |
         
         # * `$Method` should contain the HttpMethod
         $Method = $request.HttpMethod
-        # * `$body` should contain the request body as a string    
+        # * `$body` should contain the request body as a string
         $body = ''
         
         # We want to match the url to a function.
@@ -950,8 +961,7 @@ $outputObject = New-Object PSObject -Property $output |
         
         # Now start our fun little server loop in a thread job.
         $newJob = [Ordered]@{
-            ScriptBlock = $this.ServerScript
-            ArgumentList = $this
+            ScriptBlock = $this.ServerScript;ArgumentList = $this
             Name = "$($this.HttpListener.Prefixes -replace '/$')"
             ThrottleLimit = 16kb
         }
@@ -994,14 +1004,11 @@ if ($prefixArguments) {
 }
 
 foreach ($verb in 'Build', 'Deploy', 'Start') {
-    if (
-        $ArgumentList -contains $verb -or
-        $MyInvocation.InvocationName -match "^$verb-"
-    ) {
+    if ($ArgumentList -contains $verb -or
+        $MyInvocation.InvocationName -match "^$verb-") {
         return $outputObject.$Verb.Invoke()
     }
 }
 
 # otherwise, output the fun
 return $outputObject
-
