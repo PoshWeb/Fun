@@ -243,7 +243,7 @@ $HttpStreamOutput = {
     }
     process {
         # Then we output each object
-        $in = $_                        
+        $in = $_
         if ($outputStream.CanWrite) {
             $outBytes = $in -as [byte[]]
             $buffer = if ($outBytes) {
@@ -638,10 +638,12 @@ $outputObject = New-Object PSObject -Property $output |
         } else {
             $request, $response = $context.Request, $context.Response
         }
+
+        $site = $this
         
         # WebSocket handshake requests should be specially handled before we route to a function.
         if ($Request.IsWebSocketRequest -and -not $context.WebSocket) {
-            if ($this.NoWebSocket) {
+            if ($site.NoWebSocket) {
                 # Method not allowed
                 $response.StatusCode = 405
                 $response.Close()
@@ -660,15 +662,15 @@ $outputObject = New-Object PSObject -Property $output |
             $webSocketResult = try { $acceptWebSocket.Result } catch { $_ }
 
             # If we do not have any sockets on this object
-            if (-not $this.Sockets) {
+            if (-not $site.Sockets) {
                 # create a dictionary to hold them.
-                $this | Add-Member NoteProperty Sockets ([Ordered]@{}) -Force
+                $site | Add-Member NoteProperty Sockets ([Ordered]@{}) -Force
             }
 
             # If we do not have any sockets on this url
-            if (-not $this.Sockets[$request.Url]) {
+            if (-not $site.Sockets[$request.Url]) {
                 # create a list
-                $this.Sockets[$request.Url] = @()
+                $site.Sockets[$request.Url] = @()
             }
             
             # Prepare our socket info.
@@ -687,20 +689,20 @@ $outputObject = New-Object PSObject -Property $output |
                 ) -Force
             $socketJobParams = [Ordered]@{
                 Name = "$($request.Url)"
-                ArgumentList = $this,$socketInfo
+                ArgumentList = $site,$socketInfo
                 ThrottleLimit = 32kb
-                ScriptBlock = $this.SocketJob
+                ScriptBlock = $site.SocketJob
             }
-            if ($this.InitializationScript) {
+            if ($site.InitializationScript) {
                 $socketJobParams.InitializationScript = $socketJobParams
             }
             # Each websocket runs in its own thread job
             $socketJob = Start-ThreadJob @socketJobParams |
-                Add-Member NoteProperty HttpListener $this.HttpListener -Force -PassThru |
+                Add-Member NoteProperty HttpListener $site.HttpListener -Force -PassThru |
                 Add-Member NoteProperty SocketInfo $socketInfo -Force -PassThru |
                 Add-Member NoteProperty WebSocket $socketInfo.WebSocket -Force -PassThru |
                 Add-Member NoteProperty Url $socketInfo.Request.Url -Force -PassThru |
-                Add-Member NoteProperty Fun $this -Force -PassThru
+                Add-Member NoteProperty Fun $site -Force -PassThru
             
             $urlString = "$($request.Url)"
             $this.Sockets[$urlString] += $socketJob
@@ -708,7 +710,7 @@ $outputObject = New-Object PSObject -Property $output |
             # While we're here, might as well clean up finished socket jobs.
             $toRemove = @()
             $this.Sockets[$urlString] = # Make one pass thru all sockets to this url
-                @(foreach ($socket in $this.Sockets[$urlString]) {
+                @(foreach ($socket in $site.Sockets[$urlString]) {
                     # If they are not completed or failed
                     if ($socket.State -notin 'Completed', 'Failed') {
                         $socket # keep it in the list
@@ -895,20 +897,20 @@ $outputObject = New-Object PSObject -Property $output |
         # We do not always want to stream content
             if ($(
                 # we should only stream if `$this` or the `$function` say so.
-                $this.Stream
+                $site.Stream
             )) {
                 if ($request.IsWebSocketRequest) {
                     # If we are streaming a websocket request
-                    $this.WebSocketStreamOutput
+                    $site.WebSocketStreamOutput
                 } else {
-                    $this.HttpStreamOutput
+                    $site.HttpStreamOutput
                 }
             } else {
                 # If we are not streaming, output is easier
                 if ($request.IsWebSocketRequest) {
-                    $this.WebSocketOutput
+                    $site.WebSocketOutput
                 } else {
-                    $this.HttpOutput
+                    $site.HttpOutput
                 }
             }
         
