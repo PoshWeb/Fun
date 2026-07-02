@@ -73,14 +73,34 @@ $(. /_includes/HighlightScript {function / {"Hello World"}})
 If we wanted to return a different content type, we can use the `[OutputType]` attribute.
 
 $(. /_includes/HighlightScript {function / {
-[OutputType("text/plain")]
-param()
-"Hello World"
+    [OutputType("text/plain")]
+    param()
+    "Hello World"
 }})
 
 This approach makes PowerShell web development simple and fun.
 
 We can use Fun to make static and dynamic websites.
+
+### Static Fun
+
+Static sites don't have to be set in stone.
+
+We can make static sites in fun simply by naming functions with an extension.
+$(. /_includes/HighlightScript {function /index.html {        
+    $message = 'This is a website', 'Hello World' | Get-Random    
+    "<h1>$message</h1>"
+}})
+
+To "build" our page, we can run our function and redirect the output
+
+$(. /_includes/HighlightScript {/index.html > ./index.html})
+
+### Fun Fun
+
+Fun's website is built in Fun.
+
+The source code is in [`/Fun.fun.ps1`](/Fun.fun.ps1)
 
 For example, the [current request](/) is handled by:
 "@
@@ -89,29 +109,47 @@ For example, the [current request](/) is handled by:
 
 
 @(
-
 $markdown -join [Environment]::NewLine | 
     ConvertFrom-Markdown | 
     Select-Object -ExpandProperty html
 
-$(. /_includes/HighlightScript $myInvocation.MyCommand.ScriptBlock)
+$(. /_includes/HighlightScript ([ScriptBlock]::Create("function / {$($myInvocation.MyCommand.ScriptBlock)
+}")))
 
-"<p>Fun is defined in a single PowerShell script:</p>"
+"<h3>How Fun Works</h3>"
 
-"
-<details>
-<summary>Fun.ps1</summary>"
+# Functions can contain functions and filters
+# These can let us write content using simple object pipelines
+filter p { "<p>$_$args<p>" }
+
+@(
+    "Fun is defined in a single PowerShell script with no dependencies"
+
+    "It outputs an object that serves functions and aliases named <code>*/*</code>"
+
+    "It is cross-platform and works out of the box in PowerShell Core"
+
+    "When we run the script, we return a server object.  This is used to route functions and keep server state"
+    
+    "We can run this script with the argument <code>start</code> to start our server"
+
+    "Or we can <code>(./Fun.ps1).Start()</code> our server"
+
+    "When requests come in, we route them.  We find the right function and call it"
+) | p
+
+"<details><summary>Fun.ps1</summary>"
+
 $funScript =
     $ExecutionContext.SessionState.InvokeCommand.GetCommand(
         'Fun','Function'
     ).ScriptBlock
 . /_includes/HighlightScript $funScript
-"</details>"
 
 "<p>Fun.ps1 is currently:</p>"
 
 "<ul>"
-    "<li>"
+    "<li>"          
         @(
             $funScript -split '(?>\r\n|\n)'
         ).Length, 'lines' -join ' '
@@ -137,7 +175,8 @@ $funScript =
             $("$funScript".Length)
         )
     "</li>"
-"</ul>"    
+"</ul>"
+"</details>"
 ) | . Layout
 }
 
@@ -174,7 +213,9 @@ function /fun/state {
 
 function /fun/website {
     $title = 'Fun Websites'
-    @(    
+
+    filter p { "<p>$_$args</p>" }
+    @(
 
     "<h1>"
     "Fun Websites"
@@ -183,25 +224,34 @@ function /fun/website {
     "Static Websites with Fun"
     "</h2>"
 
-    "<p>"
-    "In a dynamic site, we run our functions on demand"    
-    "</p>"
-
-    "<p>"
-    "To make a static site, we can just run our fun once and save it to a file"
-    "</p>"
+    p "In a dynamic site, we run our functions on demand"
+    
+    p "To make a static site, we can just run our functions save their output to a file"    
 
     /_includes/HighlightScript {/ > ./index.html}
         
-    "<p>"
-    "To make this easier, fun includes a <pre>.Build()</pre> method"
-    "</p>"
+    p "To make this easier, fun includes two methods: <code>.Build()</code> and <code>.Deploy()</code>"    
 
-    "<pre>"
-        "<code class='language-powershell'>"
-            [Web.HttpUtility]::HtmlEncode("(fun).Build()")
-        "</code>"
-    "</pre>"
+    p "Build runs every function named <code>*.*</code>, and gives you their output as text"    
+
+    /_includes/HighlightScript {
+        # Fun .Build()
+        (fun).Build()
+    }
+
+    p "Since <code>Build</code> is an approved verb, we can also"
+
+    /_includes/HighlightScript {
+        # Build-Fun
+        Build-Fun
+    }
+
+    p "We can also <code>.Deploy()</code> a build."
+
+    p "This will run the <code>.Build()</code> and write all the files to disk, beneath the current directory."
+
+    p "This will <code>Deploy</code> the content as a static site"
+    
     ) | . Layout
 }
 
@@ -212,34 +262,78 @@ function /fun/experiment {
         . Layout
 }
 
-function /security {
-    "$((ConvertFrom-Markdown -LiteralPath (
-        Get-Module Fun | Split-Path | Join-Path -ChildPath "security.md" 
-    )).Html)" | . Layout
+
+# We can turn a number of files into endpoints
+# First up is the easy case of `*.*.ps1` files
+foreach ($fileToMount in 
+    Get-ChildItem -Recurse -File -Filter *.*.ps1 -Path $PSScriptRoot) {
+
+    # Skip any *.*.ps1 that does not have a web-friendly implied extension.
+    if ($fileToMount.Name -notmatch '\.(?>html|css|json|js|svg)\.ps1$') {
+        continue
+    }
+    
+    # Get the relative path
+    $relativePath =
+        $fileToMount.FullName.Substring($PSScriptRoot.Length) -replace 
+            '\.ps1$' -replace '[\\/]','/'    
+
+    # Set an alias from our relative path to our file    
+    Set-Alias $relativePath $fileToMount.FullName
+
+    # If the file was an index, also mount to the base path
+    if ($relativePath -match '/index[^/]+$') {
+        Set-Alias ($relativePath -replace '/index[^/]+$') $fileToMount.FullName
+    }
 }
 
-Set-Alias /security/index.html /security
+# Next up are Markdown files
+foreach ($markdownFile in
+    Get-ChildItem -Path $PSScriptRoot -Filter *.md  -File -Recurse) {
+    
+    # We _could_ create a function that reads the markdown
+    # But it will be faster to create a function that has already read the markdown. 
 
-function /contributing {
-    "$((ConvertFrom-Markdown -LiteralPath (
-        Get-Module Fun | Split-Path | Join-Path -ChildPath "contributing.md" 
-    )).Html)"|
-    . Layout
+    # Convert the contents from markdown
+    $markdown = Get-Content $markdownFile.FullName -Raw |
+        ConvertFrom-Markdown
+
+    # and determine the right relative path
+    $relativeName = $markdownFile.FullName.Substring(
+        $PSScriptRoot.Length
+    ) -replace '\.md$' -replace '[\\/]', '/' -replace '_', '-'
+
+    # and the name of the markdown
+    $markdownName = $markdownFile.Name -replace '\.md$' -replace '_', '-'    
+
+    # Our function name is our relative path
+    $functionName = "$relativeName"
+
+    # We will use the function provider to create the function
+    # so we need to predetermine the function name.
+    $functionPath = "function:/$functionName"
+
+    # And then magically create a script
+    $scriptLines = @(
+        # Set a title
+        "`$title = '$($markdownName -replace
+            '-','\s' -replace
+            "'","''"
+        )'"
+        # embed the html and pass it to layout
+        "'$($markdown.Html -replace "'","''")' | . layout"
+    )
+
+    # Create the function
+    $ExecutionContext.SessionState.PSVariable.Set(
+        $functionPath,
+        ($scriptLines -join [Environment]::NewLine)
+    )
+    # and set an /index.html alias
+    Set-Alias "$functionName/index.html" $functionName
 }
-
-Set-Alias /contributing/index.html /contributing
-
-function /code-of-conduct {
-    ConvertFrom-Markdown -LiteralPath (
-        Get-Module Fun | Split-Path | Join-Path -ChildPath "code_of_conduct.md"
-    ) |
-    Select-Object -ExpandProperty Html |
-    . Layout
-}
-
-Set-Alias /code-of-conduct/index.html /code-of-conduct
 function /get/fun {
-    [OutputType('text/plain')]
+    [OutputType('text/x-powershell')]
     param()
     Get-Command Get-Fun | 
         Select-Object -ExpandProperty ScriptBlock
@@ -254,6 +348,11 @@ function /404 {
 }
 
 Set-Alias /404.html /404
+
+Start-Fun -Parameter @{
+    PaletteName = 'AventureTime', 'Popping-and-Locking' | Get-Random
+    AnalyticsId = 'G-HLWZJJGDCP'
+}
 
 
 # $fun
