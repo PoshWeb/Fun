@@ -139,6 +139,12 @@ $BufferSize = 64kb,
 [byte]
 $JsonDepth = 5,
 
+# Any site wide parameters or metadata.
+# If any keys match parameter names, will attempt to set the parameter.
+[Alias('Parameters','Metadata')]
+[Collections.IDictionary]
+$Parameter,
+
 # The Script Block used to route requests
 # This accepts a url as the first argument,
 # and all other arguments as functions.
@@ -453,18 +459,36 @@ Update-TypeData -TypeName $myTypeName -Force -DefaultDisplayPropertySet (
 
 # Create a dictionary for our output object
 $output = [Ordered]@{PSTypeName = $myTypeName}
-foreach ($key in $MyInvocation.MyCommand.Parameters.Keys) {
+
+# Handle any defined `-Parameter`
+$myParameters = $MyInvocation.MyCommand.Parameters
+if ($Parameter.Count) {
+    foreach ($parameterName in $Parameter.Keys) {
+        # If the parameterName is one of this commands parameters
+        if ($myParameters[$parameterName]) {
+            # Try to bind the value
+            $ExecutionContext.SessionState.PSVariable.Set(
+                $parameterName, $Parameter[$parameterName])
+        } else {
+            # Otherwise, set the key
+            $output[$parameterName] = $Parameter[$parameterName]
+        }
+    }
+}
+
+# Bind all of our existing parameters
+foreach ($key in $myParameters.Keys) {
     $var = $ExecutionContext.SessionState.PSVariable.get($key)
     if ($var) { $output[$key] = $var.Value }
 }
 
-# Initialize it with a number of functions
-$output.CreatedAt  = [DateTime]::Now
+# Hard code a small number of fields:
+$output.CreatedAt  = [DateTime]::Now # * `.CreatedAt`
 $output.Functions  = $ExecutionContext.SessionState.InvokeCommand.GetCommands(
     '*/*','Function,Alias', $true
-)
-$output.Arguments  = $ArgumentList
-$output.Input      = $allInput
+) # * `.Functions`
+$output.Arguments  = $ArgumentList # * `.Arguments`
+$output.Input      = $allInput # * `.Input`
 
 # Create our object and extend it
 $outputObject = New-Object PSObject -Property $output |
