@@ -188,12 +188,14 @@ $Router = {
             foreach ($function in $functions) {
                 # We don't want to be too picky about ending slashes,
                 # so remove them from our function name.
-                $functionNameNoSlash = $function.Name -replace '/$'
+                $functionWildcard = $function.Name -replace 
+                    '/$' -replace 
+                    '/[\:\$][^/]+','/?*'
                 if (
                     # If the local path is like our function name
                     $localPath -and (
                         # we've found our function
-                        $localPath -replace '/$' -like $functionNameNoSlash
+                        $localPath -replace '/$' -like $functionWildcard
                     )
                 ) {
                     # Break after the first function we find.
@@ -203,6 +205,137 @@ $Router = {
             }
         }
     )
+},
+
+[ScriptBlock]
+$GetFunctionFormData = {
+    param([uri]$url, [string]$body, [string]$contentType)
+
+    $formData = [Ordered]@{}
+    if ($Url.Query) {    
+        $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Url.Query)
+        # Then copy over our parameters.
+        foreach ($queryParameter in $parsedQueryString.Keys) {
+            if (-not $queryParameter) { continue }
+            $formData[$queryParameter] = $parsedQueryString[$queryParameter]
+            if ($formData[$queryParameter] -match '^(true|false)$') {
+                $formData[$queryParameter] = $formData[$queryParameter] -match '^true'
+            }
+        }
+    }
+
+    # If the method is POST and we can read input
+    if ($ContentType -eq 'application/x-www-form-urlencoded' -and $body) {
+        # Read the input
+        $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Body)
+        foreach ($queryParameter in $parsedQueryString.Keys) {
+            if (-not $queryParameter) { continue }
+            $formData[$queryParameter] = $parsedQueryString[$queryParameter]
+            if ($formData[$queryParameter] -match '^(true|false)$') {
+                $formData[$queryParameter] = $formData[$queryParameter] -match '^true'
+            }
+        }
+    }
+    
+    return $formData
+},
+
+[ScriptBlock]
+$GetFunctionJsonParameter = {
+    <#
+    .SYNOPSIS
+        Gets Function Json Parameters.
+    .DESCRIPTION
+        Gets any function parameters defined in a json body.
+    #>
+},
+
+[Alias('GetFunctionArguments','GetFunctionArgs')]
+[ScriptBlock]
+$GetFunctionPathParameter = {
+    <#
+    .SYNOPSIS
+        Gets parameters from the path
+    .DESCRIPTION
+        Gets function parameters from the path segments.
+    #>
+    param(
+    [Parameter(Mandatory)]$Function,
+    [Parameter(Mandatory)][uri]$Url
+    )
+    
+    # Break the name into segments after we
+    $nameSegments = @(
+        $function.Name -replace
+            # remove http and ws protocols
+            '^(?>http|ws)s?://' -replace
+                # replace any `*.*` before a slash
+                '^[^\.]+\..+/' -split 
+                    # and split them just after every / or the end
+                    '(?<=(?>/|$))'
+    )
+
+    # If we want verbose information, trace out the name and url segments    
+    if ($VerbosePreference -notin 'Ignore','SilentlyContinue') {
+        Write-Verbose "$($NameSegments -join "`t")"
+        Write-Verbose "$($url.Segments -join "`t")"
+    }
+    
+
+    $PathParameters = [Ordered]@{
+        Function = $Function
+        Url = $Url
+        BoundParameters = [Ordered]@{}        
+    }
+
+    $PathParameters.UnboundArguments = @(
+        # To get arguments, we need to go thru each segment in the name    
+        for ($nSegment = 0; $nSegment -lt $nameSegments.Length; $nSegment++) {
+            # and (potentially) map it to the corresponding request segment.
+            $requestSegment =
+                if ($nSegment -le $url.Segments.Count) {
+                    $Url.Segments[$nSegment]
+                } else {
+                    # If we are out of actual request segments, break
+                    break 
+                }
+            
+            $nameSegment = $nameSegments[$nSegment]
+
+            $requestSegment = $requestSegment -replace '/'
+
+            # If the name segment is a variable
+            if ($nameSegment -match '^[\:\$]') {
+                # it should be a parameter name.
+                $parameterName = $nameSegment -replace '^[\:\$]'
+                if ($functionParameterMap[$parameterName]) {                    
+                    $PathParameters.BoundParameters[$parameterName] = $requestSegment
+                }
+            }
+
+            if ($nameSegment -match '^\*/?$') {
+                $requestSegment
+            }
+
+        }
+        $nSegment--
+
+        if ($nSegment -lt $url.Segments.Length -and 
+            $nameSegment -match '^\*/?$') {
+            $range = $nSegment..($url.Segments.Length - 1)
+            
+            foreach ($segment in $Url.Segments[$range]) {                
+                $segment -replace '/'
+            }
+        }
+    )
+    return $PathParameters
+}, 
+
+[ScriptBlock]
+$GetFunctionQueryParameter = {
+    param($url)
+    
 },
 
 # Initialization scripts
@@ -322,8 +455,12 @@ $ServerScript = {
         } catch {
             $err = $_
             $response.StatusCode = 400
+            $response.ContentType = 'text/plain'
             $response.Close([Text.Encoding]::UTF8.GetBytes(
-                "$err"
+                "$err$(
+                    if ($err.Exception.InnerException) { [Environment]::Newline; $err.Exception.InnerException}
+                    $err | Select-Object * | Out-String
+                )"
             ), $false)
             $err
         }        
@@ -398,7 +535,6 @@ $SocketJob = {
                 } else { $null }
             
             if ($socketMessage) {
-                $socketMessage
                 $this.Run($socketInfo, $socketMessage)
             } else {
                 $this.Run($socketInfo)
@@ -652,7 +788,12 @@ $outputObject = New-Object PSObject -Property $output |
         .DESCRIPTION
             Run the function in http request context or websocket context
         #>
-        param($context, $data)
+        param(
+        # The context
+        $context,
+
+        $socketMessage
+        )
 
         # Allow for mock requests by enabling casting to uris
         if ($context -as [uri]) {
@@ -729,11 +870,11 @@ $outputObject = New-Object PSObject -Property $output |
                 Add-Member NoteProperty Fun $site -Force -PassThru
             
             $urlString = "$($request.Url)"
-            $this.Sockets[$urlString] += $socketJob
+            $site.Sockets[$urlString] += $socketJob
 
             # While we're here, might as well clean up finished socket jobs.
             $toRemove = @()
-            $this.Sockets[$urlString] = # Make one pass thru all sockets to this url
+            $site.Sockets[$urlString] = # Make one pass thru all sockets to this url
                 @(foreach ($socket in $site.Sockets[$urlString]) {
                     # If they are not completed or failed
                     if ($socket.State -notin 'Completed', 'Failed') {
@@ -758,6 +899,8 @@ $outputObject = New-Object PSObject -Property $output |
         # We want to match the url to a function.
         $url = $request.Url
 
+        $encoding = [Text.Encoding]::UTF8
+
         $headers = [Ordered]@{}
         if ($request.Headers) {
             foreach ($key in $request.Headers.Keys) {
@@ -767,6 +910,7 @@ $outputObject = New-Object PSObject -Property $output |
 
         $cookies = [Ordered]@{}
         foreach ($cookie in $request.Cookies) {
+            if (-not $cookie.Name) { continue }
             $Cookies[$cookie.Name] = $cookie
         }
 
@@ -809,92 +953,91 @@ $outputObject = New-Object PSObject -Property $output |
 
         # If we have not mapped a function, return.
         if (-not $function) { return }
-
-        # To add to the fun, we want our functions to take parameters
-        $query = [Ordered]@{}
-        # If the request had a query, parse it.
-        if ($request.Url.Query) {
-            $parsedQueryString = [Web.HttpUtility]::ParseQueryString($request.Url.Query)
-            # Then copy over our parameters.
-            foreach ($queryParameter in $parsedQueryString.Keys) {
-                $query[$queryParameter] = $parsedQueryString[$queryParameter]
-                if ($query[$queryParameter] -match '^(true|false)$') {
-                    $query[$queryParameter] = $query[$queryParameter] -match '^true'
-                }
-            }
+                
+        # Http input streams can only be read once
+        # and we may want to read the content twice
+        # (or in two different ways)
+        $memoryStream = [IO.MemoryStream]::new()
+        $streamReader = $null
+        
+        if ($request.InputStream.CanRead) {
+            $request.InputStream.CopyTo($memoryStream)
         }
         
-        # If the method is POST and we can read input
-        if ($Method -eq 'POST' -and $request.InputStream.CanRead) {
-            # and we are dealing with `x-www-form-urlencoded` form data
-            if (
-                $request.ContentType -eq 'application/x-www-form-urlencoded'
-            ) {
-                $reader = [IO.StreamReader]::new($request.InputStream)
-                $Body = $reader.ReadToEnd()
-                $reader.Close(),$reader.Dispose()
-                # Read the input            
-                $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Body)
-                foreach ($queryParameter in $parsedQueryString.Keys) {
-                    $query[$queryParameter] = $parsedQueryString[$queryParameter]
-                    if ($query[$queryParameter] -match '^(true|false)$') {
-                        $query[$queryParameter] = $query[$queryParameter] -match '^true'
-                    }
-                }
-            }
-            elseif ($request.ContentType -eq 'application/json') {
-                $reader = [IO.StreamReader]::new($request.InputStream)
-                $Body = $reader.ReadToEnd()
-                $reader.Close(),$reader.Dispose()
-
-                try {
-                    $parsedBody = ConvertFrom-Json -InputObject $body
-                    foreach ($property in $parsedBody.psobject.properties) {
-                        $query[$property.Name] = $parsedBody.($property.Name)
-                    }
-                } catch {
-                    $ex = $_
-                    $response.StatusCode = 400
-                    $response.Close([Text.Encoding]::UTF8.GetBytes(
-                        "$ex"
-                    ), $false)
-                    return
-                }
-            }            
+        # If we have any input
+        if ($memoryStream.Length) {
+            $null = $memoryStream.Seek(0,'begin')
+            $streamReader = [IO.StreamReader]::new($memoryStream)
+            # read the body
+            $Body = $streamReader.ReadToEnd()
+            # seek back to 0 so we can read things again
+            $null = $memoryStream.Seek(0,'begin')
         }
 
-        # And use its command metadata to find all possible parameters
+        # To add to the fun, we want our functions to take parameters
+        $FormData = . $site.GetFunctionFormData.GetNewClosure() $request.Url $body $request.ContentType
+
+        $query = [Ordered]@{} + $FormData
+        
+        # If the method is POST and we can read input
+        if ($body -and $request.ContentType -eq 'application/json') {
+            $parsedBody = ConvertFrom-Json -InputObject $body
+            foreach ($property in $parsedBody.psobject.properties) {
+                if (-not $property) { continue }
+                $query[$property.Name] = $parsedBody.($property.Name)
+            }
+        }
+
+        # Get our path parameters
+        $pathParameters = @(
+            . $site.GetFunctionPathParameter.GetNewClosure() $function $url
+        )
+
+        # Create a map of all potential parameter names.
         $functionParameterMap = @{}
         foreach ($parameter in @((
             $function -as [Management.Automation.CommandMetadata]
         ).Parameters.Values)) {
+            # PowerShell parameters have names
             $functionParameterMap[$parameter.Name] = $parameter
+            # but can also have any number of aliases.
             foreach ($alias in $parameter.Aliases) {
                 $functionParameterMap[$alias] = $parameter
             }
         }
         
-        # Now take all of our query parameters
+        # Create a collection of all function parameters
         $functionParameters = [Ordered]@{}
-        foreach ($queryParameter in $query.Keys) {
-            # and map them to the function where we can
-            $functionParameter = $functionParameterMap[$queryParameter]
-            if ($functionParameter) {
-                $functionParameters[
-                    $functionParameter.Name
-                ] = $query[$queryParameter]
+
+        # Go over every source of potential named parameters,
+        foreach ($namedParameters in $FormData, $pathParemeters.BoundParameters) {
+            # walk over each parameter name in the set,
+            foreach ($parameterName in $namedParameters.Keys) {
+                # check that it is a parameter
+                $functionParameter = $functionParameterMap[$parameterName]                
+                if ($functionParameter) {
+                    # and map the parameter to the value.
+                    $functionParameters[
+                        $functionParameter.Name
+                    ] = $namedParameters[$parameterName]
+                }
             }
         }
 
-        # If we passed a data object, walk over its properties
-        foreach ($property in $data.psobject.properties) {
-            # and map them to the function where we can.
-            $functionParameter = $functionParameterMap[$property.Name]
-            if ($functionParameter) {
-                $functionParameters[$functionParameter.Name] =
-                    $data.$($property.Name)
+        # If we passed a socket message, walk over its properties
+        if ($socketMessage -isnot [string] -and 
+            $socketMessage -isnot [object[]]
+        ) {
+            foreach ($property in $socketMessage.psobject.properties) {
+                # and map them to the function where we can.
+                $functionParameter = $functionParameterMap[$property.Name]
+                if ($functionParameter) {
+                    $functionParameters[$functionParameter.Name] =
+                        $socketMessage.$($property.Name)
+                }
             }
         }
+        
 
         # If the function had an output type like `*/*`
         if ($function.OutputType.Name -like '*/*' -and
@@ -913,8 +1056,6 @@ $outputObject = New-Object PSObject -Property $output |
             # default to `text/html`
             $response.ContentType = 'text/html'
         }
-
-        $encoding = [Text.Encoding]::UTF8
         
         # We need to determine how we will handle function output.
         $FunctionOutput =
@@ -938,19 +1079,35 @@ $outputObject = New-Object PSObject -Property $output |
                 }
             }
         
+        $functionArgs = $pathParameters.UnboundArguments
         $functionOutput = $functionOutput.GetNewClosure()
-        
         # Call our function and stream the results
         try {
-            . $function @functionParameters *>&1 | 
-                . $functionOutput
+            # If the function had positional parameters
+            if ($functionArgs) {
+                # pass them first
+                . $function @functionArgs @functionParameters *>&1 |
+                    . $functionOutput
+            } else {
+                # otherwise, call our function with named parameters
+                . $function @functionParameters *>&1 |
+                    . $functionOutput
+            }
         } catch {
             $err = $_
             $response.StatusCode = 400
+            $response.ContentType = 'text/plain'
             $response.Close([Text.Encoding]::UTF8.GetBytes(
-                "$err"
+                "$($err | Out-String)"
             ), $false)
             $err
+        } finally {
+            if ($streamReader) {
+                $streamReader.Close(),$streamReader.Dispose()
+            }
+            if ($memoryStream) {
+                $memoryStream.Close(),$memoryStream.Dispose()
+            }
         }
     } -Force -PassThru |
     #endregion `.Run`
