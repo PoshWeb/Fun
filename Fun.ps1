@@ -343,7 +343,16 @@ $GetFunctionQueryParameter = {
 # This should not expose any functions not defined in the initialization scripts.
 # Any required modules should be imported.
 [Alias('Init','IsolateScript')]
-[Management.Automation.ExternalScriptInfo[]]
+[ValidateScript({
+    if ($_ -isnot [ScriptBlock] -and 
+        $_ -isnot [Management.Automation.ExternalScriptInfo] -and 
+        -not ($_ -match '\.ps1$' -and (Test-Path $_))
+    ) {
+        throw "Must be ScriptBlock or External Script"
+    }
+    return $true
+})]
+[PSObject[]]
 $InitializeScript,
 
 # A script block used to output http requests.
@@ -1151,11 +1160,27 @@ $outputObject = New-Object PSObject -Property $output |
         if ($this.InitializeScript) {
             $initializationScript = [ScriptBlock]::Create(
                 @(
-                    foreach ($initScript in $this.Initialize) {
-                        foreach ($required in $initScript.ScriptBlock.Ast.ScriptRequirements.RequiredModules) {
-                            "Import-Module $($required.Name) -Global"
+                    foreach ($initScript in $this.InitializeScript) {                        
+                        if ($initScript.File -or $initScript -is [string]) {
+                            $initScript = 
+                                $ExecutionContext.SessionState.InvokeCommand.GetCommand(
+                                    $(
+                                        if ($initScript.File) {
+                                            $initScript.File
+                                        } else {
+                                            $initScript
+                                        }
+                                    ), 'ExternalScript'
+                                )
                         }
-                        ". '$($initScript.Source -replace "'","''")'"
+                        if ($initScript -is [Management.Automation.ExternalScriptInfo]) {
+                            foreach ($required in $initScript.ScriptBlock.Ast.ScriptRequirements.RequiredModules) {
+                                "Import-Module $($required.Name) -Global"
+                            }
+                            ". '$($initScript.Source -replace "'","''")'"
+                        } else {
+                            ". {$initScript}"
+                        }                        
                     }
                 ) -join [Environment]::NewLine
             )
