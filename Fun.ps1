@@ -971,15 +971,15 @@ $outputObject = New-Object PSObject -Property $output |
 
         # To add to the fun, we want our functions to take parameters
         $FormData = . $site.GetFunctionFormData.GetNewClosure() $request.Url $body $request.ContentType
-
-        $query = [Ordered]@{} + $FormData
         
+        $jsonData = [Ordered]@{}        
         # If the method is POST and we can read input
         if ($body -and $request.ContentType -eq 'application/json') {
+            Write-Warning $body
             $parsedBody = ConvertFrom-Json -InputObject $body
             foreach ($property in $parsedBody.psobject.properties) {
                 if (-not $property) { continue }
-                $query[$property.Name] = $parsedBody.($property.Name)
+                $jsonData[$property.Name] = $parsedBody.($property.Name)
             }
         }
 
@@ -1005,7 +1005,11 @@ $outputObject = New-Object PSObject -Property $output |
         $functionParameters = [Ordered]@{}
 
         # Go over every source of potential named parameters,
-        foreach ($namedParameters in $FormData, $pathParameters.BoundParameters) {
+        foreach ($namedParameters in 
+            $FormData,             
+            $jsonData,
+            $pathParameters.BoundParameters
+        ) {
             if (-not $namedParameters) { continue }
             # walk over each parameter name in the set,
             foreach ($parameterName in $namedParameters.Keys) {
