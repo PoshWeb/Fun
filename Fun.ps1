@@ -972,10 +972,9 @@ $outputObject = New-Object PSObject -Property $output |
         # To add to the fun, we want our functions to take parameters
         $FormData = . $site.GetFunctionFormData.GetNewClosure() $request.Url $body $request.ContentType
         
-        $jsonData = [Ordered]@{}        
+        $jsonData = [Ordered]@{}
         # If the method is POST and we can read input
-        if ($body -and $request.ContentType -eq 'application/json') {
-            Write-Warning $body
+        if ($body -and $request.ContentType -eq 'application/json') {            
             $parsedBody = ConvertFrom-Json -InputObject $body
             foreach ($property in $parsedBody.psobject.properties) {
                 if (-not $property) { continue }
