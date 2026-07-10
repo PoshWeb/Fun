@@ -155,13 +155,14 @@ $Router = {
     $url, $functions = $args
     if (-not $url) { return }
     # We can have one of three possible names
+    
     $exactNames = @(
         # Fully qualified (i.e `function http://127.0.0.1/ {}` )
         $url.Scheme,'://',
             $url.DnsSafeHost,
                 $url.LocalPath -join ''
         # Host qualified (i.e `function example.com/ {}` )
-        $url.DnsSafeHost, 
+        $url.DnsSafeHost,
             $url.LocalPath -join ''
         # Scheme qualified (i.e. `function http:// {}` ) 
         $url.Scheme,':/',
@@ -180,7 +181,7 @@ $Router = {
                 [Regex]::Escape($exactName)
             }) -join '|'
         ))/?$")
-                
+
     return @(
         if ($exactMatches) {
             $exactMatches[0]
@@ -188,8 +189,8 @@ $Router = {
             foreach ($function in $functions) {
                 # We don't want to be too picky about ending slashes,
                 # so remove them from our function name.
-                $functionWildcard = $function.Name -replace 
-                    '/$' -replace 
+                $functionWildcard = $function.Name -replace
+                    '/$' -replace
                     '/[\:\$][^/]+','/?*'
                 if (
                     # If the local path is like our function name
@@ -224,7 +225,7 @@ $GetFunctionFormData = {
         }
     }
 
-    # If the method is POST and we can read input
+    # If the content type is urlencoded and we have a body
     if ($ContentType -eq 'application/x-www-form-urlencoded' -and $body) {
         # Read the input
         $parsedQueryString = [Web.HttpUtility]::ParseQueryString($Body)
@@ -238,16 +239,6 @@ $GetFunctionFormData = {
     }
     
     return $formData
-},
-
-[ScriptBlock]
-$GetFunctionJsonParameter = {
-    <#
-    .SYNOPSIS
-        Gets Function Json Parameters.
-    .DESCRIPTION
-        Gets any function parameters defined in a json body.
-    #>
 },
 
 [Alias('GetFunctionArguments','GetFunctionArgs')]
@@ -281,7 +272,6 @@ $GetFunctionPathParameter = {
         Write-Verbose "$($url.Segments -join "`t")"
     }
     
-
     $PathParameters = [Ordered]@{
         Function = $Function
         Url = $Url
@@ -307,24 +297,20 @@ $GetFunctionPathParameter = {
             # If the name segment is a variable
             if ($nameSegment -match '^[\:\$]') {
                 # it should be a parameter name.
-                $parameterName = $nameSegment -replace '^[\:\$]'
-                if ($functionParameterMap[$parameterName]) {                    
-                    $PathParameters.BoundParameters[$parameterName] = $requestSegment
-                }
+                $parameterName = $nameSegment -replace '^[\:\$]'                
+                # and we should map the segment by name.
+                $PathParameters.BoundParameters[$parameterName] = $requestSegment                
             }
 
-            if ($nameSegment -match '^\*/?$') {
-                $requestSegment
-            }
-
+            # If the segment is a wildcard, we will map the segment positionally
+            if ($nameSegment -match '^\*/?$') { $requestSegment }
         }
+
         $nSegment--
 
-        if ($nSegment -lt $url.Segments.Length -and 
-            $nameSegment -match '^\*/?$') {
+        if ($nSegment -lt $url.Segments.Length) {
             $range = $nSegment..($url.Segments.Length - 1)
-            
-            foreach ($segment in $Url.Segments[$range]) {                
+            foreach ($segment in $Url.Segments[$range]) {
                 $segment -replace '/'
             }
         }
@@ -1019,11 +1005,12 @@ $outputObject = New-Object PSObject -Property $output |
         $functionParameters = [Ordered]@{}
 
         # Go over every source of potential named parameters,
-        foreach ($namedParameters in $FormData, $pathParemeters.BoundParameters) {
+        foreach ($namedParameters in $FormData, $pathParameters.BoundParameters) {
+            if (-not $namedParameters) { continue }
             # walk over each parameter name in the set,
             foreach ($parameterName in $namedParameters.Keys) {
                 # check that it is a parameter
-                $functionParameter = $functionParameterMap[$parameterName]                
+                $functionParameter = $functionParameterMap[$parameterName]
                 if ($functionParameter) {
                     # and map the parameter to the value.
                     $functionParameters[
@@ -1088,7 +1075,7 @@ $outputObject = New-Object PSObject -Property $output |
                 }
             }
         
-        $functionArgs = $pathParameters.UnboundArguments
+        $functionArgs = @($pathParameters.UnboundArguments)
         $functionOutput = $functionOutput.GetNewClosure()
         # Call our function and stream the results
         try {
