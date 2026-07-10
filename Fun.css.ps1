@@ -115,13 +115,15 @@ $CodeFont = $(
     @(
         # display as a grid
         "display: grid"                    
-        "grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))"                    
+        "grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))"
+        "text-align: center"
+        "place-items: center"
         "justify-items: center"
-        "justify-content: space-between"                    
+        "justify-content: space-between"
     ) -join ';'
 "}"
 
-".adknowledge { text-align: right; font-size: 0.9rem; margin-right: 1rem; margin-bottom: 1rem; }"
+
 
 # `a` anchors do not get text decoration
 "a, a:visited { text-decoration: none; }"
@@ -165,6 +167,18 @@ $CodeFont = $(
 # Render code and pre elements in our code font, fall back to monospace.
 "pre, code { font-family: '$CodeFont', monospace; }"
 "code { padding: 0.5rem }"
+
+".adknowledge {"
+    @(
+        "font-size: 0.9rem"
+        "margin-bottom: 1rem"
+        "text-align: center"
+        "display: grid"
+        "place-items: center"
+        "height: 4.2rem"
+    ) -join ';'
+"}"
+".adknowledge svg { height: 4.2rem }"
 
 # Include our highlight colors.
 /_includes/HighlightColors
