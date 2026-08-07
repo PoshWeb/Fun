@@ -7,7 +7,30 @@ describe Fun {
             function /form { param([int]$Number) $Number }
 
             function /json { param([int]$Number) $Number }
-        } | Import-Module -Global        
+
+            function /args/* { $args }
+
+            function /named/:named {
+                param($named)
+                $Named
+            }
+
+            function /socket {                
+                param(
+                [double]$Number
+                )
+                
+                if ($request.IsWebSocketRequest) {
+                    if ($Number) {
+                        [Ordered]@{number = $Number}
+                    } else {
+                        [Ordered]@{number = Get-Random}
+                    }                    
+                } else {
+                    
+                }
+            }
+        } | Import-Module -Global
     }
     it 'Is Fun To Make a Server' {        
         $job = Start-Fun
@@ -44,6 +67,20 @@ describe Fun {
         ) -ContentType (
             'application/json'
         )  | Should -Be "$randomNumber"
+        $job.HttpListener.Stop()
+    }
+
+    it 'Can map positional arguments' {
+        $randomNumber = Get-Random
+        $job = Start-Fun
+        Invoke-RestMethod "$($job.Name)/args/$randomNumber" | Should -Be "$randomNumber"
+        $job.HttpListener.Stop()
+    }
+
+    it 'Can map positional named parameters' {
+        $randomNumber = Get-Random
+        $job = Start-Fun
+        Invoke-RestMethod "$($job.Name)/named/$randomNumber/" | Should -Be "$randomNumber"
         $job.HttpListener.Stop()
     }
 }
