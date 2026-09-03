@@ -6,7 +6,18 @@
             name = 'Check out repository'
             uses = 'actions/checkout@main'
         }
+
+        'PreviewFun'
         
+        @{
+            name = 'Upload Preview Artifact'
+            uses = 'actions/checkout@main'
+            with = @{
+                name = 'preview'
+                path = './preview/**'
+            }
+        }
+        #>
         @{
             'name'='Log in to the Container registry'
             if   = '${{github.ref_name == ''main'' || github.ref_name == ''master'' || github.ref_name == ''latest''}}'
