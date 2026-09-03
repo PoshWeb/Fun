@@ -137,7 +137,10 @@ param(
             # "</button>"
             "</a>"                    
         }
-    )
+    ),
+
+    [cultureinfo]
+    $Culture = 'en-us'
 )
 
 filter htmlEncode { [Web.HttpUtility]::HtmlEncode("$_") }
@@ -145,7 +148,8 @@ filter attributEncode {[Web.HttpUtility]::HtmlAttributeEncode("$_")}
 filter urlEncode {[Web.HttpUtility]::UrlEncode("$_")}
 
 @(
-"<html>"    
+"<!DOCTYPE html>"
+"<html lang='$($Culture)'>"    
     "<head>"
         if ($AnalyticsId) {
             @"
