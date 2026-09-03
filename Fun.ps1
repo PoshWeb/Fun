@@ -347,20 +347,31 @@ $HttpOutput = {
     $allOutput = @($input)
     $allOutputBytes = $allOutput -as [byte[]]
     if (-not $allOutputBytes) {
-        # with a buffer holding all the output
-        $allOutputBytes = $encoding.GetBytes((@(
-            foreach ($in in $allOutput) {
+        $allContent = 
+            @(foreach ($in in $allOutput) {
                 $inXml = $in.OuterXml
                 if ($inXml) {"$inXml"}
                 elseif ($($inHtml = $in.html;$inHtml)) {"$inHtml"}
                 elseif ($in.ToString.Invoke) {$in.ToString()}
-            }
-        ) -join ''))
+            })
+        if ($response.ContentType -eq 'text/html' -and 
+            $site.Layout -is [ScriptBlock]) {
+            
+            $allOutputBytes = $encoding.GetBytes(
+                ($allContent | . $site.Layout.GetNewClosure())
+            )
+        } else {
+            $allOutputBytes = $encoding.GetBytes($allContent -join '')
+        }        
     }
-    # CGI requests just need to close
-    $response.Close(
-        $allOutputBytes,$false
-    )
+    if ($allOutputBytes) {
+        # CGI requests just need to close
+        $response.Close(
+            $allOutputBytes,$false
+        )
+    } else {
+        $response.Close()
+    }    
 },
 
 # A script block used to stream http outputs.
@@ -409,6 +420,13 @@ $HttpStreamOutput = {
         if ($response.Close) {$response.Close()}
     }
 },
+
+# A Layout script block
+# If this is provided, and the function outputs html,
+# all non-streamed HTTP output will be passed to the layout script.
+# Any output will be piped to the layout.
+[ScriptBlock]
+$Layout,
 
 # The server script.
 # This should listen for requests and `.Run` with that context.
@@ -636,14 +654,39 @@ $outputObject = New-Object PSObject -Property $output |
             Output a list of paths and the contents of the files. 
         #>
         param()
-        $this.Functions |
+
+        # Collect our functions
+        $functions = @($this.Functions)
+        # and set our site
+        $site = $this
+
+        # Walk over each function
+        $functions |
             . { process {
                 $cmd = $_
 
+                # Only build functions named *.*                
                 if ($cmd.Name -notlike '*.*') { return }
-                if ($cmd.Name -match '\*') { return }
-
-                try {$output = . $cmd} 
+                # that do not have wildcards or variables
+                if ($cmd.Name -match '[\*\:\$]') { return }
+                
+                # Try to run each command.
+                try {
+                    # Collect it's output
+                    $output = . $cmd
+                    if (
+                        # If we have a layout script
+                        ($site.Layout -is [ScriptBlock]) -and
+                        (
+                            # and the output type is `text/html`
+                            ($cmd.OutputType -match 'text/html') -or
+                            (-not $cmd.OutputType) # or unspecified
+                        )
+                    ) {
+                        # Send our output to our layout.
+                        $output = $output | . $site.Layout
+                    }
+                }
                 catch {
                     Write-Warning "Error building $($cmd.Name): $_ "
                     return
@@ -909,6 +952,8 @@ $outputObject = New-Object PSObject -Property $output |
             $Cookies[$cookie.Name] = $cookie
         }
 
+        $ContentType = $request.ContentType
+
         $webSocket = $null
         # This is only _slightly_ different for websocket requests.
         # If the request is a websocket request, and we've got a live socket
@@ -970,11 +1015,11 @@ $outputObject = New-Object PSObject -Property $output |
         }
 
         # To add to the fun, we want our functions to take parameters
-        $FormData = . $site.GetFunctionFormData.GetNewClosure() $request.Url $body $request.ContentType
+        $FormData = . $site.GetFunctionFormData.GetNewClosure() $request.Url $body $ContentType
         
         $jsonData = [Ordered]@{}
         # If the method is POST and we can read input
-        if ($body -and $request.ContentType -eq 'application/json') {            
+        if ($body -and $ContentType -eq 'application/json') {            
             $parsedBody = ConvertFrom-Json -InputObject $body
             foreach ($property in $parsedBody.psobject.properties) {
                 if (-not $property) { continue }
