@@ -31,56 +31,45 @@ describe Fun {
                 }
             }
         } | Import-Module -Global
+
+        $funJob = Start-Fun
     }
-    it 'Is Fun To Make a Server' {        
-        $job = Start-Fun
-        
-        Invoke-RestMethod "$($job.Name)/hi" | 
-            Should -Be "Hello from Fun"
-        
-        $job.HttpListener.Stop()
+    it 'Is Fun To Make a Server' {                        
+        Invoke-RestMethod "$($funJob.Name)/hi" | 
+            Should -Be "Hello from Fun"                
     }
 
     it 'Is easy to map query strings' {        
         $randomNumber = Get-Random
-        $job = Start-Fun
         Invoke-RestMethod (
-            "$($job.Name)/query/?number=$randomNumber"
+            "$($funJob.Name)/query/?number=$randomNumber"
         ) | Should -Be "$randomNumber"
-        $job.HttpListener.Stop()
+
     }
 
-    it 'Can map form data' {    
+    it 'Can map form data' {
         $randomNumber = Get-Random
-        $job = Start-Fun
-        Invoke-RestMethod "$($job.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
+        Invoke-RestMethod "$($funJob.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
             'application/x-www-form-urlencoded'
-        )  | Should -Be "$randomNumber"
-        $job.HttpListener.Stop()
+        )  | Should -Be "$randomNumber"        
     }
 
     it 'Can map json data' {        
         $randomNumber = Get-Random
-        $job = Start-Fun
-        Invoke-RestMethod "$($job.Name)/json" -Method POST -Body (
+        Invoke-RestMethod "$($funJob.Name)/json" -Method POST -Body (
             @{number=$randomNumber} | ConvertTo-Json
         ) -ContentType (
             'application/json'
         )  | Should -Be "$randomNumber"
-        $job.HttpListener.Stop()
     }
 
     it 'Can map positional arguments' {
-        $randomNumber = Get-Random
-        $job = Start-Fun
-        Invoke-RestMethod "$($job.Name)/args/$randomNumber" | Should -Be "$randomNumber"
-        $job.HttpListener.Stop()
+        $randomNumber = Get-Random        
+        Invoke-RestMethod "$($funJob.Name)/args/$randomNumber" | Should -Be "$randomNumber"        
     }
 
     it 'Can map positional named parameters' {
-        $randomNumber = Get-Random
-        $job = Start-Fun
-        Invoke-RestMethod "$($job.Name)/named/$randomNumber/" | Should -Be "$randomNumber"
-        $job.HttpListener.Stop()
+        $randomNumber = Get-Random        
+        Invoke-RestMethod "$($funJob.Name)/named/$randomNumber/" | Should -Be "$randomNumber"        
     }
 }
