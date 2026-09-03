@@ -1249,7 +1249,13 @@ if ($prefixArguments) {
 foreach ($verb in 'Build', 'Deploy', 'Start') {
     if ($ArgumentList -contains $verb -or
         $MyInvocation.InvocationName -match "^$verb-") {
-        return $outputObject.$Verb.Invoke()
+        # Any other arguments should be passed to the verb
+        $remainingArgs = @(
+            foreach ($arg in $ArgumentList) {
+                if ($arg -ne $verb) {$arg }
+            }
+        )
+        return $outputObject.$Verb.Invoke($remainingArgs)
     }
 }
 
