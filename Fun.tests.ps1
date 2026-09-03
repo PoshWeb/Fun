@@ -33,7 +33,7 @@ describe Fun {
         } | Import-Module -Global
 
         $global:funJob = Start-Fun
-        $global:InvokeRestMethod = $ExecutionContext.SessionState.InvokeCommand('Invoke-RestMethod', 'Cmdlet')
+        $global:InvokeRestMethod = $ExecutionContext.SessionState.InvokeCommand.GetCommand('Invoke-RestMethod', 'Cmdlet')
     }
     it 'Is Fun To Make a Server' {
         & $global:InvokeRestMethod "$($global:funJob.Name)/hi" | 
