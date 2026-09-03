@@ -33,15 +33,16 @@ describe Fun {
         } | Import-Module -Global
 
         $global:funJob = Start-Fun
+        $global:InvokeRestMethod = $ExecutionContext.SessionState.InvokeCommand('Invoke-RestMethod', 'Cmdlet')
     }
     it 'Is Fun To Make a Server' {
-        Invoke-RestMethod "$($global:funJob.Name)/hi" | 
+        & $global:InvokeRestMethod "$($global:funJob.Name)/hi" | 
             Should -Be "Hello from Fun"                
     }
 
     it 'Is easy to map query strings' {        
         $randomNumber = [Random]::new().next()
-        Invoke-RestMethod (
+        & $global:InvokeRestMethod (
             "$($global:funJob.Name)/query/?number=$randomNumber"
         ) | Should -Be "$randomNumber"
 
@@ -49,14 +50,14 @@ describe Fun {
 
     it 'Can map form data' {
         $randomNumber = [Random]::new().next()
-        Invoke-RestMethod "$($global:funJob.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
+        & $global:InvokeRestMethod "$($global:funJob.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
             'application/x-www-form-urlencoded'
         )  | Should -Be "$randomNumber"        
     }
 
     it 'Can map json data' {        
         $randomNumber = [Random]::new().next()
-        Invoke-RestMethod "$($global:funJob.Name)/json" -Method POST -Body (
+        & $global:InvokeRestMethod "$($global:funJob.Name)/json" -Method POST -Body (
             @{number=$randomNumber} | ConvertTo-Json
         ) -ContentType (
             'application/json'
@@ -65,11 +66,11 @@ describe Fun {
 
     it 'Can map positional arguments' {
         $randomNumber = [Random]::new().next()        
-        Invoke-RestMethod "$($global:funJob.Name)/args/$randomNumber" | Should -Be "$randomNumber"        
+        & $global:InvokeRestMethod "$($global:funJob.Name)/args/$randomNumber" | Should -Be "$randomNumber"        
     }
 
     it 'Can map positional named parameters' {
         $randomNumber = [Random]::new().next()
-        Invoke-RestMethod "$($global:funJob.Name)/named/$randomNumber/" | Should -Be "$randomNumber"
+        & $global:InvokeRestMethod "$($global:funJob.Name)/named/$randomNumber/" | Should -Be "$randomNumber"
     }
 }
