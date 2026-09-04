@@ -37,27 +37,32 @@ function / {
 
 
 if ($args) {
-    # If there are arguments, output them (you could handle them in a more complex way).
+    # If there are arguments,
+    
     $remainingArgs = @(foreach ($arg in $args) {
-        if ($arg -match '\.ps1$' -and (Test-Path $arg)) {
+        # run any `.fun.ps1` that exists
+        if ($arg -match '\.fun\.ps1$' -and (Test-Path $arg)) {
             . $arg
         } else {
-            $arg
+            $arg 
         }
     })
 
-    $fun = fun "http://*/" @remainingArgs
-    # Launch three replicas
-    $fun.Start();$fun.Start();$fun.Start()
+    # and pass thru any remaining arguments.
+    $fun = fun @remainingArgs
+    $fun
 } else {
     if (Test-Path ./Fun.fun.ps1) {
-        . ./Fun.fun.ps1
+        $fun = . ./Fun.fun.ps1
+        $fun | Add-Member NoteProperty Prefixes "http://*/" -Force
+        $fun.Start();$fun.Start();$fun.Start();
     } else {
         function / { "Hello from Fun" }
+        $fun = fun "http://*/"
+        # Launch three replicas
+        $fun.Start();$fun.Start();$fun.Start()    
     }
-    $fun = fun "http://*/"
-    # Launch three replicas
-    $fun.Start();$fun.Start();$fun.Start()    
+    
 }
 
 
