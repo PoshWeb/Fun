@@ -1158,7 +1158,7 @@ $outputObject = New-Object PSObject -Property $output |
 
     #region `.Start`
     Add-Member ScriptMethod Start {
-        param()
+        param([string]$Prefix)
         # In order to start the fun, we need an http listener
         if (-not $this.HttpListener) {
             # Attach this listener to this object
@@ -1166,7 +1166,11 @@ $outputObject = New-Object PSObject -Property $output |
                 [Net.HttpListener]::new()
             ) -Force
             # If we have any prefixes, add them.
-            if ($this.Prefixes) {
+            if ($prefix) {
+                $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
+                $this.HttpListener.Prefixes.Add($httpPrefix)
+            }
+            elseif ($this.Prefixes) {
                 foreach ($prefix in $this.Prefixes) {
                     $httpPrefix = $prefix -replace '/{0,}$' -replace '$', '/'
                     $this.HttpListener.Prefixes.Add($httpPrefix)
