@@ -8,14 +8,10 @@ if (-not $ExecutionContext.SessionState.InvokeCommand.GetCommand('layout', 'Alia
             "<head>"
                 '<meta charset="utf-8">'
                 "<title>$([Web.HttpUtility]::HtmlEncode("$title"))</title>"
-                "<style>"
-                    
+                "<style>"                    
                     "body { max-width:80vw; height: 100vh; margin-left: auto; margin-right: auto; }"
-
                     "h1 { text-align: center }"
-
                     "h2 { text-align: center }"
-
                 "</style>"
             "</head>"
             "<body>"
@@ -67,7 +63,6 @@ This makes servers incredibly simple.
 _Your function is your server_.
 
 Let's write Hello World:
-
 $(. /_includes/HighlightScript {function / {"Hello World"}})
 
 If we wanted to return a different content type, we can use the `[OutputType]` attribute.
@@ -87,7 +82,7 @@ We can use Fun to make static and dynamic websites.
 Static sites don't have to be set in stone.
 
 We can make static sites in fun simply by naming functions with an extension.
-$(. /_includes/HighlightScript {function /index.html {        
+$(. /_includes/HighlightScript {function /index.html {
     $message = 'This is a website', 'Hello World' | Get-Random    
     "<h1>$message</h1>"
 }})
@@ -96,25 +91,34 @@ To "build" our page, we can run our function and redirect the output
 
 $(. /_includes/HighlightScript {/index.html > ./index.html})
 
+To learn more, see [Fun Websites](/fun/website)
+
 ### Fun Fun
 
 Fun's website is built in Fun.
 
 The source code is in [`/Fun.fun.ps1`](/Fun.fun.ps1)
 
-For example, the [current request](/) is handled by:
+For example, the [current request](/) is handled by the function `/`:
 "@
-    
 )
-
 
 @(
 $markdown -join [Environment]::NewLine | 
     ConvertFrom-Markdown | 
-    Select-Object -ExpandProperty html
+        Select-Object -ExpandProperty html
 
-$(. /_includes/HighlightScript ([ScriptBlock]::Create("function / {$($myInvocation.MyCommand.ScriptBlock)
-}")))
+"<details><summary>function /</summary>"
+. /_includes/HighlightScript (
+    [ScriptBlock]::Create(
+        ("function / {", 
+            $myInvocation.MyCommand.ScriptBlock, 
+                "}" -join [Environment]::NewLine)
+    )
+)
+"</details>"
+
+"<p><a href='/fun/website/source'>View Website Source</a>"
 
 "<h3>How Fun Works</h3>"
 
@@ -177,7 +181,7 @@ $funScript =
     "</li>"
 "</ul>"
 "</details>"
-) | . Layout
+)
 }
 
 function /get/command {
@@ -198,7 +202,7 @@ function /get/command {
     }
     "</ul>"
     "</ul>"
-    ) | . Layout
+    )
 }
 
 Set-Alias /index.html /
@@ -251,17 +255,35 @@ function /fun/website {
     p "This will run the <code>.Build()</code> and write all the files to disk, beneath the current directory."
 
     p "This will <code>Deploy</code> the content as a static site"
+
+    /_includes/HighlightScript {
+        # Deploy-Fun will build and deploy any *.* file.
+        # Existing files will be overwritten.
+        Deploy-Fun
+    }
     
-    ) | . Layout
+    )
 }
 
 function /fun/experiment {
     "<h1>Fun Experiment</h1>",
     "<h3>Fun is an experiment</h3>",
-    "<p>Fun is a fun server, and it is experimental and subject to change</p>" |
-        . Layout
+    "<p>Fun is a fun server, and it is experimental and subject to change</p>"
 }
 
+function /fun/website/source {
+    $title = "Fun Website Source Code"
+    "<h1>$title</h1>"
+    . /_includes/HighlightScript $site.Define
+}
+
+function /fun/website/code {
+    [OutputType('text/plain')]
+    param()
+    "$($site.Define)"
+}
+
+Set-Alias /fun/website.ps1 /fun/website/code
 
 # We can turn a number of files into endpoints
 # First up is the easy case of `*.*.ps1` files
@@ -287,6 +309,8 @@ foreach ($fileToMount in
     }
 }
 
+Set-Alias /main.css /Fun.css
+
 # Next up are Markdown files
 foreach ($markdownFile in
     Get-ChildItem -Path $PSScriptRoot -Filter *.md  -File -Recurse) {
@@ -301,10 +325,10 @@ foreach ($markdownFile in
     # and determine the right relative path
     $relativeName = $markdownFile.FullName.Substring(
         $PSScriptRoot.Length
-    ) -replace '\.md$' -replace '[\\/]', '/' -replace '_', '-'
+    ) -replace '\.md$' -replace '[\\/]', '/'
 
     # and the name of the markdown
-    $markdownName = $markdownFile.Name -replace '\.md$' -replace '_', '-'    
+    $markdownName = $markdownFile.Name -replace '\.md$'
 
     # Our function name is our relative path
     $functionName = "$relativeName"
@@ -321,7 +345,7 @@ foreach ($markdownFile in
             "'","''"
         )'"
         # embed the html and pass it to layout
-        "'$($markdown.Html -replace "'","''")' | . layout"
+        "'$($markdown.Html -replace "'","''")'"
     )
 
     # Create the function
@@ -332,28 +356,27 @@ foreach ($markdownFile in
     # and set an /index.html alias
     Set-Alias "$functionName/index.html" $functionName
 }
-function /get/fun {
+function /get/fun.ps1 {
     [OutputType('text/x-powershell')]
     param()
     Get-Command Get-Fun | 
         Select-Object -ExpandProperty ScriptBlock
 }
 
-Set-Alias /get/fun.ps1 /get/fun
 function /404 {
     @(
         "<h1>404</h1>"
         "<h2><img src='https://media1.tenor.com/m/_OXEOGoxedQAAAAC/hal9000-hal.gif' /></h2>"
-    ) | . Layout
+    )
 }
 
 Set-Alias /404.html /404
 
-Start-Fun -Parameter @{
-    PaletteName = 'AventureTime', 'Popping-and-Locking' | Get-Random
+Fun -Parameter @{
+    PaletteName = 'AdventureTime', 'Andromeda', 'Konsolas', 'Popping-and-Locking', 'Wez' | Get-Random
     AnalyticsId = 'G-HLWZJJGDCP'
-}
-
+    Layout = $ExecutionContext.SessionState.InvokeCommand.GetCommand('layout','Alias').ResolvedCommand.ScriptBlock
+} @args
 
 # $fun
 # $fun = 1..10 | ./fun.ps1 some fun args
