@@ -989,8 +989,9 @@ $outputObject = New-Object PSObject -Property $output |
         }
 
         # After we've routed, get the last matching function. 
+        
         $function = $functions[-1]
-
+        
         # If we have not mapped a function, return.
         if (-not $function) { return }
                 
@@ -1031,12 +1032,13 @@ $outputObject = New-Object PSObject -Property $output |
         $pathParameters = @(
             . $site.GetFunctionPathParameter.GetNewClosure() $function $url
         )
-
+        
         # Create a map of all potential parameter names.
         $functionParameterMap = @{}
         foreach ($parameter in @((
             $function -as [Management.Automation.CommandMetadata]
         ).Parameters.Values)) {
+            if (-not $parameter) { continue }
             # PowerShell parameters have names
             $functionParameterMap[$parameter.Name] = $parameter
             # but can also have any number of aliases.
