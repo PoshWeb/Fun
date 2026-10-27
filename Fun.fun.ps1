@@ -31,6 +31,60 @@ if ($PSScriptRoot) {
     Push-Location $PSScriptRoot
 }
 
+#region Markdown Files
+# Next up are Markdown files
+$markdownFiles = @(Get-ChildItem -Path $PSScriptRoot -Filter *.md -File -Recurse)
+if ($env:GITHUB_WORKFLOW) {
+    "::group:: MarkdownFiles"
+    $markdownFiles | Out-Host
+    "::endgroup::"
+}
+foreach ($markdownFile in
+    $markdownFiles) {
+    
+    # We _could_ create a function that reads the markdown
+    # But it will be faster to create a function that has already read the markdown. 
+
+    # Convert the contents from markdown
+    $markdown = Get-Content $markdownFile.FullName -Raw |
+        ConvertFrom-Markdown
+
+    # and determine the right relative path
+    $relativeName = $markdownFile.FullName.Substring(
+        $PSScriptRoot.Length
+    ) -replace '\.md$' -replace '[\\/]', '/'
+
+    # and the name of the markdown
+    $markdownName = $markdownFile.Name -replace '\.md$'
+
+    # Our function name is our relative path
+    $functionName = "$relativeName"
+
+    # We will use the function provider to create the function
+    # so we need to predetermine the function name.
+    $functionPath = "function:/$functionName"
+
+    # And then magically create a script
+    $scriptLines = @(
+        # Set a title
+        "`$title = '$($markdownName -replace
+            '-','\s' -replace
+            "'","''"
+        )'"
+        # embed the html and pass it to layout
+        "'$($markdown.Html -replace "'","''")'"
+    )
+
+    # Create the function
+    $ExecutionContext.SessionState.PSVariable.Set(
+        $functionPath,
+        ($scriptLines -join [Environment]::NewLine)
+    )
+    # and set an /index.html alias
+    Set-Alias "$functionName/index.html" $functionName
+}
+#endregion Markdown Files
+
 $includesPath = Join-Path $PSScriptRoot _includes
 
 foreach ($include in Get-ChildItem -Path $includesPath -Filter *.ps1) {
@@ -312,51 +366,6 @@ foreach ($fileToMount in
 
 Set-Alias /main.css /Fun.css
 
-# Next up are Markdown files
-foreach ($markdownFile in
-    Get-ChildItem -Path $PSScriptRoot -Filter *.md  -File -Recurse) {
-    
-    # We _could_ create a function that reads the markdown
-    # But it will be faster to create a function that has already read the markdown. 
-
-    # Convert the contents from markdown
-    $markdown = Get-Content $markdownFile.FullName -Raw |
-        ConvertFrom-Markdown
-
-    # and determine the right relative path
-    $relativeName = $markdownFile.FullName.Substring(
-        $PSScriptRoot.Length
-    ) -replace '\.md$' -replace '[\\/]', '/'
-
-    # and the name of the markdown
-    $markdownName = $markdownFile.Name -replace '\.md$'
-
-    # Our function name is our relative path
-    $functionName = "$relativeName"
-
-    # We will use the function provider to create the function
-    # so we need to predetermine the function name.
-    $functionPath = "function:/$functionName"
-
-    # And then magically create a script
-    $scriptLines = @(
-        # Set a title
-        "`$title = '$($markdownName -replace
-            '-','\s' -replace
-            "'","''"
-        )'"
-        # embed the html and pass it to layout
-        "'$($markdown.Html -replace "'","''")'"
-    )
-
-    # Create the function
-    $ExecutionContext.SessionState.PSVariable.Set(
-        $functionPath,
-        ($scriptLines -join [Environment]::NewLine)
-    )
-    # and set an /index.html alias
-    Set-Alias "$functionName/index.html" $functionName
-}
 function /get/fun.ps1 {
     [OutputType('text/x-powershell')]
     param()
