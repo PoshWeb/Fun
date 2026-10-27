@@ -28,6 +28,7 @@ if ($PSScriptRoot) {
     if (Test-Path $layoutPath) {
         Set-Alias Layout $layoutPath
     }
+    Push-Location $PSScriptRoot
 }
 
 $includesPath = Join-Path $PSScriptRoot _includes
@@ -377,6 +378,10 @@ Fun -Parameter @{
     AnalyticsId = 'G-HLWZJJGDCP'
     Layout = $ExecutionContext.SessionState.InvokeCommand.GetCommand('layout','Alias').ResolvedCommand.ScriptBlock
 } @args
+
+if ($PSScriptRoot) {
+    Pop-Location
+}
 
 # $fun
 # $fun = 1..10 | ./fun.ps1 some fun args
