@@ -1,5 +1,4 @@
 
-Set-Alias Invoke-Rest Invoke-RestMethod
 describe Fun {
     BeforeAll {
         New-Module -Name Foo -ScriptBlock {
@@ -35,7 +34,7 @@ describe Fun {
         } | Import-Module -Global
 
         $global:funJob = Start-Fun        
-        $global:InvokeRestMethod = $ExecutionContext.SessionState.InvokeCommand.GetCommand('Invoke-RestMethod', 'Cmdlet')
+        Set-Alias Invoke-Rest Invoke-RestMethod        
     }
     it 'Is Fun To Make a Server' {
         Invoke-Rest "$($global:funJob.Name)/hi" | 
