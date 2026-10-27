@@ -3,7 +3,7 @@
     uses = 'actions/upload-artifact@main'
     with = @{
         name = 'Preview'
-        path = '**Preview**'
+        path = '**/preview/**'
     }
     if = '${{always()}}'
 }
