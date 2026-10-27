@@ -1,5 +1,4 @@
-Import-Module ./Fun.psd1 -Force -PassThru
+$funModule = Import-Module ./Fun.psd1 -Force -PassThru
 
-. ./Fun.fun.ps1
-
-(fun).Deploy()
+$funJob = . ./Fun.fun.ps1
+$funJob.Fun.Deploy()
