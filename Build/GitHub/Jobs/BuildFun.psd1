@@ -9,14 +9,17 @@
 
         'PreviewFun'
         
-        @{
+        <#@{
             name = 'Upload Preview Artifact'
             uses = 'actions/checkout@main'
             with = @{
                 name = 'preview'
                 path = './preview/**'
             }
-        }
+        }#>
+
+        'PreviewFunUpload'
+        
         #>
         @{
             'name'='Log in to the Container registry'

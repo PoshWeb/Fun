@@ -504,6 +504,12 @@ jobs:
           if ($PSScriptRoot -notmatch '/_temp') {
               Pop-Location
           }
+      - name: PreviewUpload
+        uses: actions/upload-artifact@main
+        with: 
+          name: Preview
+          path: '**Preview**'
+        if: ${{always()}}
       - name: Log in to the Container registry
         if: ${{github.ref_name == 'main' || github.ref_name == 'master' || github.ref_name == 'latest'}}
         uses: docker/login-action@master
