@@ -43,26 +43,37 @@ describe Fun {
 
     it 'Is easy to map query strings' {        
         $randomNumber = [Random]::new().next()
+        $funServer = Start-Fun -InitializeScript {
+            function /query { param([int]$Number) $Number }
+        }
         Invoke-Rest (
-            "$($global:funJob.Name)/query/?number=$randomNumber"
+            "$($funServer.Name)/query/?number=$randomNumber"
         ) | Should -Be "$randomNumber"
-
+        $funServer | Stop-Job
     }
 
     it 'Can map form data' {
         $randomNumber = [Random]::new().next()
-        Invoke-Rest "$($global:funJob.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
+        $funServer = Start-Fun -InitializeScript {
+            function /form { param([int]$Number) $Number }
+        }        
+        Invoke-Rest "$($funServer.Name)/form" -Method POST -Body "number=$randomNumber" -ContentType (
             'application/x-www-form-urlencoded'
         )  | Should -Be "$randomNumber"
+        $funServer | Stop-Job
     }
 
     it 'Can map json data' {        
         $randomNumber = [Random]::new().next()
-        Invoke-Rest "$($global:funJob.Name)/json" -Method POST -Body (
+        $funServer = Start-Fun -InitializeScript {
+            function /json { param([int]$Number) $Number }
+        }
+        Invoke-Rest "$($funServer.Name)/json" -Method POST -Body (
             @{number=$randomNumber} | ConvertTo-Json
         ) -ContentType (
             'application/json'
         )  | Should -Be "$randomNumber"
+        $funServer | Stop-Job
     }
 
     it 'Can map positional arguments' {
