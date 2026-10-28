@@ -34,11 +34,6 @@ if ($PSScriptRoot) {
 #region Markdown Files
 # Next up are Markdown files
 $markdownFiles = @(Get-ChildItem -Path $PSScriptRoot -Filter *.md -File -Recurse)
-if ($env:GITHUB_WORKFLOW) {
-    "::group:: MarkdownFiles"
-    $markdownFiles | Out-Host
-    "::endgroup::"
-}
 foreach ($markdownFile in
     $markdownFiles) {
     
