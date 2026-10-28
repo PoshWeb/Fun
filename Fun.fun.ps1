@@ -377,7 +377,7 @@ function /404 {
 
 Set-Alias /404.html /404
 
-Fun -Parameter @{
+. Fun -Parameter @{
     PaletteName = 'AdventureTime', 'Andromeda', 'Konsolas', 'Popping-and-Locking', 'Wez' | Get-Random
     AnalyticsId = 'G-HLWZJJGDCP'
     Layout = $ExecutionContext.SessionState.InvokeCommand.GetCommand('layout','Alias').ResolvedCommand.ScriptBlock
