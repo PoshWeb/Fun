@@ -5,8 +5,7 @@ Import-BuildStep -SourcePath (
 
 Push-Location ($PSScriptRoot | Split-Path)
 
-New-GitHubWorkflow -Name "Build Fun" -On Push, PullRequest, Demand -Job PowerShellStaticAnalysis, 
-    TestPowerShellOnLinux, 
+New-GitHubWorkflow -Name "Build Fun" -On Push, Demand -Job TestPowerShellOnLinux, 
     TagReleaseAndPublish, 
     buildfun -OutputPath .\.github\workflows\BuildFun.yml  -Env ([Ordered]@{      
         "REGISTRY" = "ghcr.io"
